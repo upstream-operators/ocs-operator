@@ -25,9 +25,9 @@ jobs:
           # Set git config
           git config --global user.name "GitHub Actions"
           git config --global user.email "41898282+github-actions@users.noreply.github.com"
+          git config --global checkout.defaultRemote "origin"
           # Copy operator patch out of working directory
           cp operator.patch ../operator.patch
-          git pull --all
           git remote add upstream https://${UPSTREAM_REPO}
           git fetch upstream
           git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do git checkout "${line#upstream/}"; git merge "upstream/${line#upstream/}"; done
