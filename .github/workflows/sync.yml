@@ -22,6 +22,9 @@ jobs:
 
       - name: Pull All Upstream Branches and push to origin
         run: |
+          # Set git config
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
           # Copy operator patch out of working directory
           cp operator.patch ../operator.patch
           git remote add upstream https://${UPSTREAM_REPO}
