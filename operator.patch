@@ -1,4 +1,4 @@
-From 12c10bdd65a5da88b045681240c28dee73f9a128 Mon Sep 17 00:00:00 2001
+From 61148226282c8d28feced030b370ac789d5908a0 Mon Sep 17 00:00:00 2001
 From: Owen Howard <owen@ziax.com>
 Date: Sun, 3 Dec 2023 17:15:58 +0000
 Subject: [PATCH] Deployment Workflow
@@ -10,7 +10,7 @@ Subject: [PATCH] Deployment Workflow
 
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
 new file mode 100644
-index 00000000..53116b35
+index 00000000..fa96468c
 --- /dev/null
 +++ b/.github/workflows/deploy.yml
 @@ -0,0 +1,67 @@
@@ -58,7 +58,7 @@ index 00000000..53116b35
 +          
 +          branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
 +          version="${branch#release-}"
-+          export IMAGE_TAG="$(date \"+${version}-%Y-%m-%d-%H%M%S\")"
++          export IMAGE_TAG=$(date "+${version}-%Y-%m-%d-%H%M%S")
 +          
 +          echo "Building and pushing images with tag ${IMAGE_TAG}"
 +
