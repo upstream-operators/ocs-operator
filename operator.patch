@@ -1,19 +1,19 @@
-From 7ceace9fbe32cd34eaad89836615e00d68cb57f7 Mon Sep 17 00:00:00 2001
+From aea28ce6cbbed3675a4e77772a309112c5b2504d Mon Sep 17 00:00:00 2001
 From: Owen Howard <owen@ziax.com>
-Date: Sun, 3 Dec 2023 17:09:41 +0000
+Date: Sun, 3 Dec 2023 17:15:58 +0000
 Subject: [PATCH] Deployment Workflow
 
 ---
- .github/workflows/deploy.yml | 59 ++++++++++++++++++++++++++++++++++++
- 1 file changed, 59 insertions(+)
+ .github/workflows/deploy.yml | 58 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 58 insertions(+)
  create mode 100644 .github/workflows/deploy.yml
 
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
 new file mode 100644
-index 00000000..8cf17c56
+index 00000000..e8ae7097
 --- /dev/null
 +++ b/.github/workflows/deploy.yml
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,58 @@
 +name: Deploy Operator
 +
 +on:
@@ -41,10 +41,6 @@ index 00000000..8cf17c56
 +        with:
 +          go-version-file: go.mod
 +
-+      - name: Replace Quay with ghcr.io
-+        run: |
-+          find . -type f -name '*' -exec sed -i 's/${{ env.IMAGE_FROM }}/${{ env.IMAGE_TO }}/g' {} +
-+
 +      - name: Login to ghcr.io
 +        uses: docker/login-action@v3
 +        with:
@@ -54,6 +50,9 @@ index 00000000..8cf17c56
 +
 +      - name: Build and Push Images
 +        run: |
++          # Replace Quay with ghcr.io
++          find . -type f -name '*' -exec sed -i "s/${IMAGE_FROM//\//\\/}/${IMAGE_TO//\//\\/}/g" {} +
++          
 +          branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
 +          version="${branch#release-}"
 +          tag=$(date "+${version}-%Y-%m-%d-%H%M%S")
