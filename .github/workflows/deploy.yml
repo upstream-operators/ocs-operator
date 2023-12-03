@@ -1,0 +1,67 @@
+name: Deploy Operator
+
+on:
+  push:
+    branches:
+      - "release-[0-9]+.[0-9]+"
+
+env:
+  IMAGE_FROM: "quay.io/ocs-dev"
+  IMAGE_TO: "ghcr.io/${{ github.repository }}"
+
+jobs:
+  deploy:
+    name: Deploy Operator
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Push Images
+        env:
+          IMAGE_REGISTRY: ghcr.io
+          REGISTRY_NAMESPACE: ${{ github.repository }}
+        run: |
+          # Replace Quay with ghcr.io
+          find . -type f -name '*' -exec sed -i "s/${IMAGE_FROM//\//\\/}/${IMAGE_TO//\//\\/}/g" {} +
+          
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
+          version="${branch#release-}"
+          export IMAGE_TAG=$(date "+${version}-%Y-%m-%d-%H%M%S")
+          
+          echo "Building and pushing images with tag ${IMAGE_TAG}"
+
+          make ocs-operator
+          podman tag ${IMAGE_TO}/ocs-operator:${IMAGE_TAG} ${IMAGE_TO}/ocs-operator:${version}
+          podman push ${IMAGE_TO}/ocs-operator:${IMAGE_TAG}
+          podman push ${IMAGE_TO}/ocs-operator:${version}
+
+          make ocs-metrics-exporter
+          podman tag ${IMAGE_TO}/ocs-metrics-exporter:${IMAGE_TAG} ${IMAGE_TO}/ocs-metrics-exporter:${version}
+          podman push ${IMAGE_TO}/ocs-metrics-exporter:${IMAGE_TAG}
+          podman push ${IMAGE_TO}/ocs-metrics-exporter:${version}
+
+          make operator-bundle
+          podman tag ${IMAGE_TO}/ocs-operator-bundle:${IMAGE_TAG} ${IMAGE_TO}/ocs-operator-bundle:${version}
+          podman push ${IMAGE_TO}/ocs-operator-bundle:${IMAGE_TAG}
+          podman push ${IMAGE_TO}/ocs-operator-bundle:${version}
+
+          make operator-catalog
+          podman tag ${IMAGE_TO}/ocs-operator-catalog:${IMAGE_TAG} ${IMAGE_TO}/ocs-operator-catalog:${version}
+          podman push ${IMAGE_TO}/ocs-operator-catalog:${IMAGE_TAG}
+          podman push ${IMAGE_TO}/ocs-operator-catalog:${version}
