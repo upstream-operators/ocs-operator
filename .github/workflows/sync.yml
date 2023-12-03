@@ -19,8 +19,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Pull All Upstream Branches
+      - name: Pull All Upstream Branches and push to origin
         run: |
           git remote add upstream https://${UPSTREAM_REPO}
           git fetch upstream
           git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do git branch --track "${line#upstream/}" "$line"; done
+          git fetch --all
+          git push --all origin
