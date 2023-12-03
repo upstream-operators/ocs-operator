@@ -1,14 +1,18 @@
-Subject: [PATCH] Deployment workflow
+From 7ceace9fbe32cd34eaad89836615e00d68cb57f7 Mon Sep 17 00:00:00 2001
+From: Owen Howard <owen@ziax.com>
+Date: Sun, 3 Dec 2023 17:09:41 +0000
+Subject: [PATCH] Deployment Workflow
+
 ---
-Index: .github/workflows/deploy.yml
-IDEA additional info:
-Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
-<+>UTF-8
-===================================================================
+ .github/workflows/deploy.yml | 59 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+ create mode 100644 .github/workflows/deploy.yml
+
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
 new file mode 100644
---- /dev/null	(revision c7c0391590fe30d51f224729f0cb85beece52e58)
-+++ b/.github/workflows/deploy.yml	(revision c7c0391590fe30d51f224729f0cb85beece52e58)
+index 00000000..8cf17c56
+--- /dev/null
++++ b/.github/workflows/deploy.yml
 @@ -0,0 +1,59 @@
 +name: Deploy Operator
 +
@@ -53,19 +57,22 @@ new file mode 100644
 +          branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
 +          version="${branch#release-}"
 +          tag=$(date "+${version}-%Y-%m-%d-%H%M%S")
-+          
++
 +          make ocs-operator
 +          podman push ${IMAGE_TO}/ocs-operator:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator:${version}
-+          
++
 +          make ocs-metrics-exporter
 +          podman push ${IMAGE_TO}/ocs-metrics-exporter:${tag}
 +          podman push ${IMAGE_TO}/ocs-metrics-exporter:${version}
-+          
++
 +          make operator-bundle
 +          podman push ${IMAGE_TO}/ocs-operator-bundle:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator-bundle:${version}
-+          
++
 +          make operator-catalog
 +          podman push ${IMAGE_TO}/ocs-operator-catalog:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator-catalog:${version}
+-- 
+2.41.0
+

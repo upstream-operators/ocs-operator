@@ -32,5 +32,5 @@ jobs:
           git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do git checkout "${line#upstream/}"; git merge "upstream/${line#upstream/}"; done
           git fetch --all
           # Check if branch exists on remote, if not apply operator.patch
-          git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do if [[ -z $(git ls-remote --heads origin "${line#upstream/}") ]]; then git checkout "${line#upstream/}"; git am -s --ignore-whitespace -3 < ../operator.patch; fi; done
+          git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do if [[ -z $(git ls-remote --heads origin "${line#upstream/}") ]]; then git checkout "${line#upstream/}"; git am --ignore-whitespace -3 < ../operator.patch; fi; done
           git push --all origin
