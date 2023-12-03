@@ -1,11 +1,21 @@
+Subject: [PATCH] Deployment workflow
+---
+Index: .github/workflows/deploy.yml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
-index e69de29b..d8e831b4 100644
---- a/.github/workflows/deploy.yml
-+++ b/.github/workflows/deploy.yml
+new file mode 100644
+--- /dev/null	(revision c7c0391590fe30d51f224729f0cb85beece52e58)
++++ b/.github/workflows/deploy.yml	(revision c7c0391590fe30d51f224729f0cb85beece52e58)
 @@ -0,0 +1,59 @@
 +name: Deploy Operator
 +
-+on: push
++on:
++  push:
++    branches:
++      - "release-[0-9]+.[0-9]+"
 +
 +env:
 +  IMAGE_FROM: "quay.io/ocs-dev/"
