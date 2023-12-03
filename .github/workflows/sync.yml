@@ -1,0 +1,25 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+
+env:
+  UPSTREAM_REPO: "github.com/red-hat-storage/ocs-operator"
+
+jobs:
+  sync:
+    name: Sync Upstream
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Pull All Upstream Branches
+        run: |
+          git remote add upstream https://${UPSTREAM_REPO}
+          git fetch upstream
+          git branch -r | grep upstream | grep -v HEAD | while read line; do git branch --track "${line#upstream/}" "$line"; done
