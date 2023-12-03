@@ -22,10 +22,12 @@ jobs:
 
       - name: Pull All Upstream Branches and push to origin
         run: |
+          # Copy operator patch out of working directory
+          cp operator.patch ../operator.patch
           git remote add upstream https://${UPSTREAM_REPO}
           git fetch upstream
           git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do git branch --track "${line#upstream/}" "$line"; done
           git fetch --all
           # Check if branch exists on remote, if not apply operator.patch
-          git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do if [[ -z $(git ls-remote --heads origin "${line#upstream/}") ]]; then git checkout "${line#upstream/}"; git apply operator.patch; fi; done
+          git branch -r | grep 'upstream/release-[0-9]\.[0-9]\+$' | grep -v HEAD | while read line; do if [[ -z $(git ls-remote --heads origin "${line#upstream/}") ]]; then git checkout "${line#upstream/}"; git apply ../operator.patch; fi; done
           git push --all origin
