@@ -1,19 +1,19 @@
-From aea28ce6cbbed3675a4e77772a309112c5b2504d Mon Sep 17 00:00:00 2001
+From ea7a2982c156c7ac3e976e7b083a9f101c0a06f6 Mon Sep 17 00:00:00 2001
 From: Owen Howard <owen@ziax.com>
 Date: Sun, 3 Dec 2023 17:15:58 +0000
 Subject: [PATCH] Deployment Workflow
 
 ---
- .github/workflows/deploy.yml | 58 ++++++++++++++++++++++++++++++++++++
- 1 file changed, 58 insertions(+)
+ .github/workflows/deploy.yml | 65 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 65 insertions(+)
  create mode 100644 .github/workflows/deploy.yml
 
 diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
 new file mode 100644
-index 00000000..e8ae7097
+index 00000000..6920875f
 --- /dev/null
 +++ b/.github/workflows/deploy.yml
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,65 @@
 +name: Deploy Operator
 +
 +on:
@@ -22,7 +22,7 @@ index 00000000..e8ae7097
 +      - "release-[0-9]+.[0-9]+"
 +
 +env:
-+  IMAGE_FROM: "quay.io/ocs-dev/"
++  IMAGE_FROM: "quay.io/ocs-dev"
 +  IMAGE_TO: "ghcr.io/${{ github.repository }}"
 +
 +jobs:
@@ -49,27 +49,34 @@ index 00000000..e8ae7097
 +          password: ${{ secrets.GITHUB_TOKEN }}
 +
 +      - name: Build and Push Images
++        env:
++          IMAGE_REGISTRY: ghcr.io
++          REGISTRY_NAMESPACE: ${{ github.repository }}
 +        run: |
 +          # Replace Quay with ghcr.io
 +          find . -type f -name '*' -exec sed -i "s/${IMAGE_FROM//\//\\/}/${IMAGE_TO//\//\\/}/g" {} +
 +          
 +          branch="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
 +          version="${branch#release-}"
-+          tag=$(date "+${version}-%Y-%m-%d-%H%M%S")
++          IMAGE_TAG=$(date "+${version}-%Y-%m-%d-%H%M%S")
 +
 +          make ocs-operator
++          podman tag ${IMAGE_TO}/ocs-operator:${tag} ${IMAGE_TO}/ocs-operator:${version}
 +          podman push ${IMAGE_TO}/ocs-operator:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator:${version}
 +
 +          make ocs-metrics-exporter
++          podman tag ${IMAGE_TO}/ocs-metrics-exporter:${tag} ${IMAGE_TO}/ocs-metrics-exporter:${version}
 +          podman push ${IMAGE_TO}/ocs-metrics-exporter:${tag}
 +          podman push ${IMAGE_TO}/ocs-metrics-exporter:${version}
 +
 +          make operator-bundle
++          podman tag ${IMAGE_TO}/ocs-operator-bundle:${tag} ${IMAGE_TO}/ocs-operator-bundle:${version}
 +          podman push ${IMAGE_TO}/ocs-operator-bundle:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator-bundle:${version}
 +
 +          make operator-catalog
++          podman tag ${IMAGE_TO}/ocs-operator-catalog:${tag} ${IMAGE_TO}/ocs-operator-catalog:${version}
 +          podman push ${IMAGE_TO}/ocs-operator-catalog:${tag}
 +          podman push ${IMAGE_TO}/ocs-operator-catalog:${version}
 -- 
