@@ -3,6 +3,7 @@ name: Sync Upstream
 on:
   schedule:
     - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 env:
   UPSTREAM_REPO: "github.com/red-hat-storage/ocs-operator"
