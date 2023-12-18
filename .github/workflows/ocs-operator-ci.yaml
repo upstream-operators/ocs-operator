@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.20"]
+        go: ["1.20", "1.21"]
     steps:
       - uses: actions/checkout@v3
         with:
@@ -37,11 +37,8 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v3
         with:
-          version: v1.51.1
-
-          # The weird NO_FUTURE thing is a workaround suggested here:
-          # # https://github.com/golangci/golangci-lint-action/issues/119#issuecomment-981090648
-          args: "--out-${NO_FUTURE}format=colored-line-number --timeout=6m ./..."
+          version: v1.54.2
+          args: "--out-format=colored-line-number --timeout=6m ./..."
 
   go-test:
     name: go test
@@ -49,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.20"]
+        go: ["1.20", "1.21"]
     steps:
       - uses: actions/setup-go@v3
         with:
@@ -69,7 +66,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.20"]
+        go: ["1.20", "1.21"]
     steps:
       - uses: actions/setup-go@v3
         with:
@@ -104,10 +101,9 @@ jobs:
 
       - uses: codespell-project/actions-codespell@master
         with:
-          exclude_file: go.sum
           check_filenames: true
           check_hidden: true
-          skip: vendor
+          skip: vendor,go.sum,api/go.sum,go.work.sum
           ignore_words_list: xdescribe,contails,shouldnot
 
   commitlint:
@@ -125,4 +121,3 @@ jobs:
           Naming Conventions -> https://commitlint.js.org/#/concepts-commit-conventions
           Rules -> https://commitlint.js.org/#/reference-rules
           How to Write a Good Git Commit Message -> https://chris.beams.io/posts/git-commit
-

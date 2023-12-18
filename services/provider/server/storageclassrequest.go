@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"reflect"
 
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
 	controllers "github.com/red-hat-storage/ocs-operator/v4/controllers/storageconsumer"
 
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -25,7 +25,7 @@ type storageClassRequestManager struct {
 	namespace string
 }
 
-func newStorageClassRequestManager(ctx context.Context, cl client.Client, namespace string) (*storageClassRequestManager, error) {
+func newStorageClassRequestManager(cl client.Client, namespace string) (*storageClassRequestManager, error) {
 	return &storageClassRequestManager{
 		client:    cl,
 		namespace: namespace,

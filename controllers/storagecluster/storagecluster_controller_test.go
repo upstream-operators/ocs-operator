@@ -4,18 +4,25 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"regexp"
 	"testing"
 
 	"github.com/blang/semver/v4"
+	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
+	nbv1 "github.com/noobaa/noobaa-operator/v5/pkg/apis/noobaa/v1alpha1"
 	configv1 "github.com/openshift/api/config/v1"
 	quotav1 "github.com/openshift/api/quota/v1"
 	routev1 "github.com/openshift/api/route/v1"
 	openshiftv1 "github.com/openshift/api/template/v1"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-
-	snapapi "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
+	api "github.com/red-hat-storage/ocs-operator/api/v4/v1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
+	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
+	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
+	statusutil "github.com/red-hat-storage/ocs-operator/v4/controllers/util"
+	"github.com/red-hat-storage/ocs-operator/v4/version"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/stretchr/testify/assert"
@@ -23,6 +30,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,15 +40,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	nbv1 "github.com/noobaa/noobaa-operator/v5/pkg/apis/noobaa/v1alpha1"
-	api "github.com/red-hat-storage/ocs-operator/v4/api/v1"
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
-	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
-	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
-	statusutil "github.com/red-hat-storage/ocs-operator/v4/controllers/util"
-	"github.com/red-hat-storage/ocs-operator/v4/version"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 )
 
 const (
@@ -602,7 +601,49 @@ func TestIsActiveStorageCluster(t *testing.T) {
 			},
 			isActive: true,
 		},
+		{
+			label: "Case 5", // internal storageCluster should be ignored if it is another namespace than operatorNamespace
+			storageCluster2: &api.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "storage-test-b",
+					Namespace: "storage-test",
+				},
+			},
+			isActive: false,
+		},
+		{
+			label: "Case 6", // external storageCluster should be allowed if it is in another namespace than operatorNamespace
+			storageCluster2: &api.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "storage-test-b",
+					Namespace: "storage-test",
+				},
+				Spec: api.StorageClusterSpec{
+					ExternalStorage: api.ExternalStorageClusterSpec{
+						Enable: true,
+					},
+				},
+			},
+			isActive: true,
+		},
+		{
+			label: "Case 7", // external storageCluster should be allowed if it is in same namespace as operatorNamespace
+			storageCluster2: &api.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "storage-test-b",
+					Namespace: "storage-test-ns",
+				},
+				Spec: api.StorageClusterSpec{
+					ExternalStorage: api.ExternalStorageClusterSpec{
+						Enable: true,
+					},
+				},
+			},
+			isActive: true,
+		},
 	}
+
+	os.Setenv("OPERATOR_NAMESPACE", "storage-test-ns")
 
 	for _, tc := range testcases {
 
@@ -613,8 +654,7 @@ func TestIsActiveStorageCluster(t *testing.T) {
 			reconciler = createFakeStorageClusterReconciler(t, tc.storageCluster2)
 		}
 
-		actual, err := reconciler.isActiveStorageCluster(tc.storageCluster2)
-		assert.NoError(t, err)
+		actual := reconciler.isActiveStorageCluster(tc.storageCluster2)
 		assert.Equalf(t, tc.isActive, actual, "[%q] failed to assert if current storagecluster is active or not", tc.label)
 	}
 
@@ -984,6 +1024,11 @@ func createFakeStorageClusterReconciler(t *testing.T, obj ...runtime.Object) Sto
 		panic(fmt.Sprintf("Failed to get clusters %s", err.Error()))
 	}
 
+	operatorNamespace, err := util.GetOperatorNamespace()
+	if err != nil {
+		operatorNamespace = "openshift-storage"
+	}
+
 	return StorageClusterReconciler{
 		Client:            client,
 		Scheme:            scheme,
@@ -992,11 +1037,14 @@ func createFakeStorageClusterReconciler(t *testing.T, obj ...runtime.Object) Sto
 		Log:               logf.Log.WithName("controller_storagecluster_test"),
 		platform:          &Platform{platform: configv1.NonePlatformType},
 		clusters:          clusters,
+		OperatorNamespace: operatorNamespace,
 	}
 }
 
 func createFakeScheme(t *testing.T) *runtime.Scheme {
-	scheme, err := api.SchemeBuilder.Build()
+	scheme := runtime.NewScheme()
+
+	err := api.AddToScheme(scheme)
 	if err != nil {
 		assert.Fail(t, "unable to build scheme")
 	}
@@ -1062,14 +1110,6 @@ func createFakeScheme(t *testing.T) *runtime.Scheme {
 	}
 
 	return scheme
-}
-
-func TestMonCountChange(t *testing.T) {
-	for nodeCount := 0; nodeCount <= 10; nodeCount++ {
-		monCountExpected := defaults.DefaultMonCount
-		monCountActual := getMonCount(0, false)
-		assert.Equal(t, monCountExpected, monCountActual)
-	}
 }
 
 // TestStorageClusterOnMultus tests if multus configurations in StorageCluster are successfully applied to CephClusterCR
@@ -1147,7 +1187,7 @@ func TestStorageClusterOnMultus(t *testing.T) {
 func assertCephClusterNetwork(t assert.TestingT, reconciler StorageClusterReconciler, cr *api.StorageCluster, request reconcile.Request) {
 	serverVersion := &k8sVersion.Info{}
 	request.Name = "ocsinit-cephcluster"
-	cephCluster, err := newCephCluster(cr, "", 3, serverVersion, nil, log)
+	cephCluster, err := newCephCluster(cr, "", serverVersion, nil, log)
 	assert.NoError(t, err)
 	err = reconciler.Client.Get(context.TODO(), request.NamespacedName, cephCluster)
 	assert.NoError(t, err)

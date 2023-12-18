@@ -35,8 +35,8 @@ import (
 	apiv2 "github.com/operator-framework/api/pkg/operators/v2"
 	"github.com/operator-framework/operator-lib/conditions"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/namespace"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/ocsinitialization"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/storageclassrequest"
@@ -127,6 +127,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	defaultNamespaces := map[string]cache.Config{
+		operatorNamespace:            {},
+		"openshift-storage-extended": {},
+	}
+
 	cfg := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                  scheme,
@@ -135,7 +140,7 @@ func main() {
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionID:        "ab76f4c9.openshift.io",
 		LeaderElectionNamespace: operatorNamespace,
-		Cache:                   cache.Options{DefaultNamespaces: map[string]cache.Config{operatorNamespace: {}}},
+		Cache:                   cache.Options{DefaultNamespaces: defaultNamespaces},
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
@@ -158,10 +163,11 @@ func main() {
 	}
 
 	if err = (&ocsinitialization.OCSInitializationReconciler{
-		Client:         mgr.GetClient(),
-		Log:            ctrl.Log.WithName("controllers").WithName("OCSInitialization"),
-		Scheme:         mgr.GetScheme(),
-		SecurityClient: secv1client.NewForConfigOrDie(mgr.GetConfig()),
+		Client:            mgr.GetClient(),
+		Log:               ctrl.Log.WithName("controllers").WithName("OCSInitialization"),
+		Scheme:            mgr.GetScheme(),
+		SecurityClient:    secv1client.NewForConfigOrDie(mgr.GetConfig()),
+		OperatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "OCSInitialization")
 		os.Exit(1)
@@ -171,6 +177,7 @@ func main() {
 		Client:            mgr.GetClient(),
 		Log:               ctrl.Log.WithName("controllers").WithName("StorageCluster"),
 		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
 		OperatorCondition: condition,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "StorageCluster")

@@ -4,7 +4,7 @@ import (
 	"context"
 	"sort"
 
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -29,6 +29,18 @@ func (c *Clusters) GetStorageClusters() []ocsv1.StorageCluster {
 	storageClusters := make([]ocsv1.StorageCluster, 0)
 	storageClusters = append(storageClusters, c.internalStorageClusters...)
 	storageClusters = append(storageClusters, c.externalStorageClusters...)
+	return storageClusters
+}
+
+func (c *Clusters) GetStorageClustersInNamespace(namespace string) []ocsv1.StorageCluster {
+	storageClusters := make([]ocsv1.StorageCluster, 0)
+
+	for _, sc := range c.GetStorageClusters() {
+		if sc.Namespace == namespace {
+			storageClusters = append(storageClusters, sc)
+		}
+	}
+
 	return storageClusters
 }
 
@@ -112,4 +124,36 @@ func GetClusters(ctx context.Context, cli client.Client) (*Clusters, error) {
 		namespaces:              namespaces,
 		namespacedNames:         namespacedNames,
 	}, nil
+}
+
+// AreOtherStorageClustersReady checks if all other storage clusters (internal and external) are ready.
+func (c *Clusters) AreOtherStorageClustersReady(instance *ocsv1.StorageCluster) bool {
+
+	for _, sc := range append(c.internalStorageClusters, c.externalStorageClusters...) {
+		// ignore the current recociling storage cluster as its status will set in the current reconcile
+		if sc.Name != instance.Name && sc.Namespace != instance.Namespace {
+			if sc.Status.Phase != PhaseReady {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
+func (c *Clusters) HasMultipleStorageClustersInNamespace(namespace string) bool {
+	return len(c.GetStorageClustersInNamespace(namespace)) > 1
+}
+
+func (c *Clusters) HasMultipleStorageClustersWithSameName(name string) bool {
+
+	var count int
+
+	for _, scName := range c.GetNames() {
+		if scName == name {
+			count++
+		}
+	}
+
+	return count > 1
 }

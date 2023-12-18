@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	api "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	api "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,7 +29,7 @@ func TestCephObjectStoreUsers(t *testing.T) {
 			t, reconciler, cr, request := initStorageClusterResourceCreateUpdateTestWithPlatform(
 				t, cp, objects, nil)
 			if c.createRuntimeObjects {
-				objects = createUpdateRuntimeObjects(t, cp, reconciler) //nolint:staticcheck //no need to use objects as they update in runtime
+				objects = createUpdateRuntimeObjects(t, reconciler) //nolint:staticcheck //no need to use objects as they update in runtime
 			}
 			assertCephObjectStoreUsers(t, reconciler, cr, request)
 		}

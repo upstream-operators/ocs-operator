@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -18,7 +17,7 @@ import (
 	objectreferencesv1 "github.com/openshift/custom-resource-status/objectreferences/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	monitoringclient "github.com/prometheus-operator/prometheus-operator/pkg/client/versioned"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
 	statusutil "github.com/red-hat-storage/ocs-operator/v4/controllers/util"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
@@ -166,7 +165,7 @@ func (obj *ocsCephCluster) ensureCreated(r *StorageClusterReconciler, sc *ocsv1.
 			return reconcile.Result{}, err
 		}
 		r.Log.Info("Monitoring Information found. Monitoring will be enabled on the external cluster.", "CephCluster", klog.KRef(sc.Namespace, sc.Name))
-		cephCluster = newExternalCephCluster(sc, r.images.Ceph, monitoringIP, monitoringPort)
+		cephCluster = newExternalCephCluster(sc, monitoringIP, monitoringPort)
 	} else {
 		// Add KMS details to CephCluster spec, only if
 		// cluster-wide encryption is enabled
@@ -191,12 +190,12 @@ func (obj *ocsCephCluster) ensureCreated(r *StorageClusterReconciler, sc *ocsv1.
 					return reconcile.Result{}, err
 				}
 			}
-			cephCluster, err = newCephCluster(sc, r.images.Ceph, r.nodeCount, r.serverVersion, kmsConfigMap, r.Log)
+			cephCluster, err = newCephCluster(sc, r.images.Ceph, r.serverVersion, kmsConfigMap, r.Log)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
 		} else {
-			cephCluster, err = newCephCluster(sc, r.images.Ceph, r.nodeCount, r.serverVersion, nil, r.Log)
+			cephCluster, err = newCephCluster(sc, r.images.Ceph, r.serverVersion, nil, r.Log)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
@@ -266,14 +265,9 @@ func (obj *ocsCephCluster) ensureCreated(r *StorageClusterReconciler, sc *ocsv1.
 	// Record actual Ceph container image version before attempting update
 	sc.Status.Images.Ceph.ActualImage = found.Spec.CephVersion.Image
 
-	// Prevent removal of any RDR optimizations if they are already applied to the existing cluster spec.
-	cephCluster.Spec.Storage.Store = determineOSDStore(cephCluster.Spec.Storage.Store, found.Spec.Storage.Store)
-
-	// Use bluestore-rdr if mirrioring is enabled
-	if sc.Spec.Mirroring.Enabled && !sc.Spec.ExternalStorage.Enable {
-		cephCluster.Spec.Storage.Store.Type = string(rookCephv1.StoreTypeBlueStoreRDR)
-		cephCluster.Spec.Storage.Store.UpdateStore = "yes-really-update-store"
-	}
+	// Allow migration of OSD to bluestore-rdr if RDR optimization annotation is added on an existing cluster.
+	// Prevent changing the bluestore-rdr settings if they are already applied in the existing ceph cluster.
+	cephCluster.Spec.Storage.Store = determineOSDStore(sc, cephCluster.Spec.Storage.Store, found.Spec.Storage.Store)
 
 	// Add it to the list of RelatedObjects if found
 	objectRef, err := reference.GetReference(r.Scheme, found)
@@ -403,7 +397,7 @@ func getCephClusterMonitoringLabels(sc ocsv1.StorageCluster) map[string]string {
 }
 
 // newCephCluster returns a CephCluster object.
-func newCephCluster(sc *ocsv1.StorageCluster, cephImage string, nodeCount int, serverVersion *version.Info, kmsConfigMap *corev1.ConfigMap, reqLogger logr.Logger) (*rookCephv1.CephCluster, error) {
+func newCephCluster(sc *ocsv1.StorageCluster, cephImage string, serverVersion *version.Info, kmsConfigMap *corev1.ConfigMap, reqLogger logr.Logger) (*rookCephv1.CephCluster, error) {
 	labels := map[string]string{
 		"app": sc.Name,
 	}
@@ -467,10 +461,20 @@ func newCephCluster(sc *ocsv1.StorageCluster, cephImage string, nodeCount int, s
 				rookCephv1.KeyOSD: systemNodeCritical,
 			},
 			Resources: newCephDaemonResources(sc),
-			ContinueUpgradeAfterChecksEvenIfNotHealthy: true,
+			// if resource profile change is in progress, then set this flag to false
+			ContinueUpgradeAfterChecksEvenIfNotHealthy: sc.Spec.ResourceProfile == sc.Status.LastAppliedResourceProfile,
 			LogCollector: logCollector,
 			Labels: rookCephv1.LabelsSpec{
+				rookCephv1.KeyMgr:        rookCephv1.Labels{defaults.ODFResourceProfileKey: sc.Spec.ResourceProfile},
+				rookCephv1.KeyMon:        rookCephv1.Labels{defaults.ODFResourceProfileKey: sc.Spec.ResourceProfile},
+				rookCephv1.KeyOSD:        rookCephv1.Labels{defaults.ODFResourceProfileKey: sc.Spec.ResourceProfile},
 				rookCephv1.KeyMonitoring: getCephClusterMonitoringLabels(*sc),
+			},
+			CSI: rookCephv1.CSIDriverSpec{
+				ReadAffinity: getReadAffinityOptions(sc),
+				CephFS: rookCephv1.CSICephFSSpec{
+					KernelMountOptions: getCephFSKernelMountOptions(sc),
+				},
 			},
 		},
 	}
@@ -581,7 +585,7 @@ func getNetworkSpec(sc ocsv1.StorageCluster) rookCephv1.NetworkSpec {
 	return networkSpec
 }
 
-func newExternalCephCluster(sc *ocsv1.StorageCluster, cephImage, monitoringIP, monitoringPort string) *rookCephv1.CephCluster {
+func newExternalCephCluster(sc *ocsv1.StorageCluster, monitoringIP, monitoringPort string) *rookCephv1.CephCluster {
 	labels := map[string]string{
 		"app": sc.Name,
 	}
@@ -624,6 +628,12 @@ func newExternalCephCluster(sc *ocsv1.StorageCluster, cephImage, monitoringIP, m
 			Network:    getNetworkSpec(*sc),
 			Labels: rookCephv1.LabelsSpec{
 				rookCephv1.KeyMonitoring: getCephClusterMonitoringLabels(*sc),
+			},
+			CSI: rookCephv1.CSIDriverSpec{
+				ReadAffinity: getReadAffinityOptions(sc),
+				CephFS: rookCephv1.CSICephFSSpec{
+					KernelMountOptions: getCephFSKernelMountOptions(sc),
+				},
 			},
 		},
 	}
@@ -690,33 +700,28 @@ func getMinimumNodes(sc *ocsv1.StorageCluster) int {
 	return maxReplica
 }
 
-func getMgrCount() int {
+func getMgrCount(sc *ocsv1.StorageCluster) int {
+	if arbiterEnabled(sc) {
+		return defaults.ArbiterModeMgrCount
+	}
+	mgrCount := sc.Spec.ManagedResources.CephCluster.MgrCount
+	if mgrCount != 0 {
+		return mgrCount
+	}
 	if statusutil.IsSingleNodeDeployment() {
 		return 1
 	}
 	return defaults.DefaultMgrCount
 }
 
-func getMonCount(monCount int, arbiter bool) int {
-	// return static value if overridden
-	override := os.Getenv(monCountOverrideEnvVar)
-	if override != "" {
-		count, err := strconv.Atoi(override)
-		if err != nil {
-			log.Error(err, "Could not decode env var.", "monCountOverrideEnvVar", monCountOverrideEnvVar)
-		} else {
-			return count
-		}
-	}
-
-	if arbiter {
+func getMonCount(sc *ocsv1.StorageCluster) int {
+	if arbiterEnabled(sc) {
 		return defaults.ArbiterModeMonCount
 	}
-
+	monCount := sc.Spec.ManagedResources.CephCluster.MonCount
 	if monCount != 0 {
 		return monCount
 	}
-
 	return defaults.DefaultMonCount
 }
 
@@ -734,7 +739,7 @@ func newStorageClassDeviceSets(sc *ocsv1.StorageCluster, serverVersion *version.
 	for _, ds := range storageDeviceSets {
 		resources := ds.Resources
 		if resources.Requests == nil && resources.Limits == nil {
-			resources = defaults.DaemonResources["osd"]
+			resources = defaults.GetProfileDaemonResources("osd", sc)
 		}
 
 		portable := ds.Portable
@@ -886,7 +891,7 @@ func newStorageClassDeviceSets(sc *ocsv1.StorageCluster, serverVersion *version.
 			ds := rookCephv1.StorageClassDeviceSet{}
 			ds.Name = failureDomainValue
 			ds.Count = 1
-			ds.Resources = defaults.DaemonResources["osd"]
+			ds.Resources = defaults.GetProfileDaemonResources("osd", sc)
 			// passing on existing defaults from existing devcicesets
 			ds.TuneSlowDeviceClass = sc.Spec.StorageDeviceSets[0].Config.TuneSlowDeviceClass
 			ds.TuneFastDeviceClass = sc.Spec.StorageDeviceSets[0].Config.TuneFastDeviceClass
@@ -960,17 +965,11 @@ func countAndReplicaOf(ds *ocsv1.StorageDeviceSet) (int, int) {
 }
 
 func newCephDaemonResources(sc *ocsv1.StorageCluster) map[string]corev1.ResourceRequirements {
-	custom := sc.Spec.Resources
 	resources := map[string]corev1.ResourceRequirements{
-		"mon": defaults.DaemonResources["mon"],
-		"mgr": defaults.DaemonResources["mgr"],
-		"mds": defaults.DaemonResources["mds"],
-		"rgw": defaults.DaemonResources["rgw"],
+		"mon": defaults.GetProfileDaemonResources("mon", sc),
+		"mgr": defaults.GetProfileDaemonResources("mgr", sc),
 	}
-	if arbiterEnabled(sc) {
-		resources["mgr-sidecar"] = defaults.DaemonResources["mgr-sidecar"]
-	}
-
+	custom := sc.Spec.Resources
 	for k := range custom {
 		if r, ok := custom[k]; ok {
 			resources[k] = r
@@ -1057,23 +1056,20 @@ func generateStretchClusterSpec(sc *ocsv1.StorageCluster) *rookCephv1.StretchClu
 }
 
 func generateMonSpec(sc *ocsv1.StorageCluster) rookCephv1.MonSpec {
-	if arbiterEnabled(sc) {
-		return rookCephv1.MonSpec{
-			Count:                getMonCount(sc.Spec.ManagedResources.CephCluster.MonCount, true),
-			AllowMultiplePerNode: false,
-			StretchCluster:       generateStretchClusterSpec(sc),
-		}
-	}
-
-	return rookCephv1.MonSpec{
-		Count:                getMonCount(sc.Spec.ManagedResources.CephCluster.MonCount, false),
+	spec := rookCephv1.MonSpec{
+		Count:                getMonCount(sc),
 		AllowMultiplePerNode: statusutil.IsSingleNodeDeployment(),
 	}
+	if arbiterEnabled(sc) {
+		spec.StretchCluster = generateStretchClusterSpec(sc)
+	}
+	return spec
 }
 
 func generateMgrSpec(sc *ocsv1.StorageCluster) rookCephv1.MgrSpec {
 	spec := rookCephv1.MgrSpec{
-		Count: getMgrCount(),
+		Count:                getMgrCount(sc),
+		AllowMultiplePerNode: statusutil.IsSingleNodeDeployment(),
 		Modules: []rookCephv1.Module{
 			{Name: "pg_autoscaler", Enabled: true},
 			{Name: "balancer", Enabled: true},
@@ -1081,13 +1077,6 @@ func generateMgrSpec(sc *ocsv1.StorageCluster) rookCephv1.MgrSpec {
 	}
 
 	return spec
-}
-
-func getCephObjectStoreGatewayInstances(sc *ocsv1.StorageCluster) int32 {
-	if arbiterEnabled(sc) {
-		return int32(defaults.ArbiterCephObjectStoreGatewayInstances)
-	}
-	return int32(defaults.CephObjectStoreGatewayInstances)
 }
 
 // addStrictFailureDomainTSC adds hard topology constraints at failure domain level
@@ -1142,7 +1131,7 @@ func createPrometheusRules(r *StorageClusterReconciler, sc *ocsv1.StorageCluster
 		changePromRuleExpr(prometheusRule, replaceTokens)
 	}
 
-	if err := createOrUpdatePrometheusRule(r, sc, prometheusRule); err != nil {
+	if err := createOrUpdatePrometheusRule(r, prometheusRule); err != nil {
 		r.Log.Error(err, "Prometheus rules could not be created.", "CephCluster", klog.KRef(cluster.Namespace, cluster.Name))
 		return err
 	}
@@ -1210,7 +1199,7 @@ func parsePrometheusRule(rules string) (*monitoringv1.PrometheusRule, error) {
 }
 
 // createOrUpdatePrometheusRule creates a prometheusRule object or an error
-func createOrUpdatePrometheusRule(r *StorageClusterReconciler, sc *ocsv1.StorageCluster, prometheusRule *monitoringv1.PrometheusRule) error {
+func createOrUpdatePrometheusRule(r *StorageClusterReconciler, prometheusRule *monitoringv1.PrometheusRule) error {
 	name := prometheusRule.GetName()
 	namespace := prometheusRule.GetNamespace()
 	client, err := getMonitoringClient()
@@ -1298,10 +1287,32 @@ func optimizeDisasterRecovery(sc *ocsv1.StorageCluster) bool {
 	return false
 }
 
-func determineOSDStore(newOSDStore, existingOSDStore rookCephv1.OSDStore) rookCephv1.OSDStore {
+func determineOSDStore(sc *ocsv1.StorageCluster, newOSDStore, existingOSDStore rookCephv1.OSDStore) rookCephv1.OSDStore {
 	if existingOSDStore.Type == string(rookCephv1.StoreTypeBlueStoreRDR) {
 		return existingOSDStore
+	} else if !sc.Spec.ExternalStorage.Enable && (isBluestore(existingOSDStore) && optimizeDisasterRecovery(sc)) {
+		return rookCephv1.OSDStore{
+			Type:        string(rookCephv1.StoreTypeBlueStoreRDR),
+			UpdateStore: "yes-really-update-store",
+		}
 	}
 
 	return newOSDStore
+}
+
+func isBluestore(store rookCephv1.OSDStore) bool {
+	if store.Type == string(rookCephv1.StoreTypeBlueStore) || store.Type == "" {
+		return true
+	}
+
+	return false
+}
+
+func getOsdCount(sc *ocsv1.StorageCluster, serverVersion *version.Info) int {
+	storageClassDeviceSets := newStorageClassDeviceSets(sc, serverVersion)
+	osdCount := 0
+	for _, ds := range storageClassDeviceSets {
+		osdCount += ds.Count
+	}
+	return osdCount
 }

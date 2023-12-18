@@ -4,14 +4,15 @@ import (
 	"context"
 	"testing"
 
-	api "github.com/red-hat-storage/ocs-operator/v4/api/v1"
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
+	api "github.com/red-hat-storage/ocs-operator/api/v4/v1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
+	providerClient "github.com/red-hat-storage/ocs-operator/v4/services/provider/client"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	"k8s.io/apimachinery/pkg/runtime"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -47,8 +48,10 @@ var (
 	}
 )
 
-func newFakeClient(t *testing.T, obj ...runtime.Object) client.Client {
-	scheme, err := api.SchemeBuilder.Build()
+func newFakeClient(t *testing.T, obj ...client.Object) client.Client {
+	scheme := runtime.NewScheme()
+
+	err := api.AddToScheme(scheme)
 	assert.NoError(t, err, "unable to build scheme")
 
 	err = corev1.AddToScheme(scheme)
@@ -60,12 +63,15 @@ func newFakeClient(t *testing.T, obj ...runtime.Object) client.Client {
 	err = rookCephv1.AddToScheme(scheme)
 	assert.NoError(t, err, "failed to add rookCephv1 scheme")
 
-	return fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(obj...).Build()
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(obj...).
+		WithStatusSubresource(obj...).Build()
 }
 
 func TestNewConsumerManager(t *testing.T) {
 	ctx := context.TODO()
-	obj := []runtime.Object{}
+	obj := []client.Object{}
 
 	// Test NewConsumerManager with no StorageConsumer resources
 	client := newFakeClient(t)
@@ -89,7 +95,7 @@ func TestNewConsumerManager(t *testing.T) {
 
 func TestCreateStorageConsumer(t *testing.T) {
 	ctx := context.TODO()
-	obj := []runtime.Object{}
+	obj := []client.Object{}
 
 	obj = append(obj, consumer1)
 	client := newFakeClient(t, obj...)
@@ -115,7 +121,7 @@ func TestCreateStorageConsumer(t *testing.T) {
 
 func TestDeleteStorageConsumer(t *testing.T) {
 	ctx := context.TODO()
-	obj := []runtime.Object{}
+	obj := []client.Object{}
 
 	obj = append(obj, consumer1)
 	client := newFakeClient(t, obj...)
@@ -142,7 +148,7 @@ func TestDeleteStorageConsumer(t *testing.T) {
 
 func TestGetStorageConsumer(t *testing.T) {
 	ctx := context.TODO()
-	obj := []runtime.Object{}
+	obj := []client.Object{}
 
 	obj = append(obj, consumer1)
 	client := newFakeClient(t, obj...)
@@ -157,4 +163,35 @@ func TestGetStorageConsumer(t *testing.T) {
 	consumer, err := consumerManager.Get(ctx, "uid1")
 	assert.NoError(t, err)
 	assert.Equal(t, "consumer1", consumer.Name)
+}
+
+func TestUpdateConsumerStatus(t *testing.T) {
+	ctx := context.TODO()
+	obj := []client.Object{}
+
+	consumer := &ocsv1alpha1.StorageConsumer{}
+	consumer1.DeepCopyInto(consumer)
+
+	// status should be preserved after update
+	consumer.Status.State = ocsv1alpha1.StorageConsumerStateReady
+
+	obj = append(obj, consumer)
+	client := newFakeClient(t, obj...)
+	consumerManager, err := newConsumerManager(ctx, client,
+		testNamespace)
+	assert.NoError(t, err)
+
+	// with fields
+	fields := providerClient.NewStorageClientStatus().
+		SetPlatformVersion("1.0.0").
+		SetOperatorVersion("1.0.0")
+	err = consumerManager.UpdateConsumerStatus(ctx, "uid1", fields)
+	assert.NoError(t, err)
+
+	c1, err := consumerManager.Get(ctx, "uid1")
+	assert.NoError(t, err)
+	assert.NotEmpty(t, c1.Status.LastHeartbeat)
+	assert.Equal(t, fields.GetPlatformVersion(), c1.Status.Client.PlatformVersion)
+	assert.Equal(t, fields.GetOperatorVersion(), c1.Status.Client.OperatorVersion)
+	assert.Equal(t, c1.Status.State, ocsv1alpha1.StorageConsumerStateReady)
 }

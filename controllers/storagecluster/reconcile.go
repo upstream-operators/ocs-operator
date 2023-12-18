@@ -11,7 +11,7 @@ import (
 	"github.com/go-logr/logr"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
 	"github.com/operator-framework/operator-lib/conditions"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
 	statusutil "github.com/red-hat-storage/ocs-operator/v4/controllers/util"
 	"github.com/red-hat-storage/ocs-operator/v4/version"
@@ -40,8 +40,6 @@ type resourceManager interface {
 type ocsJobTemplates struct{}
 
 const (
-	monCountOverrideEnvVar = "MON_COUNT_OVERRIDE"
-
 	// Name of MetadataPVCTemplate
 	metadataPVCName = "metadata"
 	// Name of WalPVCTemplate
@@ -109,10 +107,10 @@ var validTopologyLabelKeys = []string{
 }
 
 // +kubebuilder:rbac:groups=ocs.openshift.io,resources=*,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ceph.rook.io,resources=cephclusters;cephblockpools;cephfilesystems;cephnfses;cephobjectstores;cephobjectstoreusers;cephrbdmirrors,verbs=*
+// +kubebuilder:rbac:groups=ceph.rook.io,resources=cephclusters;cephblockpools;cephfilesystems;cephnfses;cephobjectstores;cephobjectstoreusers;cephrbdmirrors;cephblockpoolradosnamespaces,verbs=*
 // +kubebuilder:rbac:groups=noobaa.io,resources=noobaas,verbs=*
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=*
-// +kubebuilder:rbac:groups=core,resources=pods;services;endpoints;persistentvolumeclaims;events;configmaps;secrets;nodes,verbs=*
+// +kubebuilder:rbac:groups=core,resources=pods;services;serviceaccounts;endpoints;persistentvolumes;persistentvolumeclaims;events;configmaps;secrets;nodes,verbs=*
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get
 // +kubebuilder:rbac:groups=apps,resources=deployments;daemonsets;replicasets;statefulsets,verbs=*
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;prometheusrules,verbs=get;list;watch;create;update;delete
@@ -130,6 +128,8 @@ var validTopologyLabelKeys = []string{
 // +kubebuilder:rbac:groups=cluster.open-cluster-management.io,resources=clusterclaims,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=operators.coreos.com,resources=clusterserviceversions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=k8s.cni.cncf.io,resources=network-attachment-definitions,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings;clusterroles;roles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=objectbucket.io,resources=objectbuckets;objectbucketclaims,verbs=get;list;watch
 
 // Reconcile reads that state of the cluster for a StorageCluster object and makes changes based on the state read
 // and what is in the StorageCluster.Spec
@@ -158,7 +158,7 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, request reconc
 		return reconcile.Result{}, err
 	}
 
-	if err := r.validateStorageClusterSpec(sc, request); err != nil {
+	if err := r.validateStorageClusterSpec(sc); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -171,9 +171,10 @@ func (r *StorageClusterReconciler) Reconcile(ctx context.Context, request reconc
 		r.Log.Error(err, "Failed to get clusters")
 		return reconcile.Result{}, err
 	}
+	r.IsMultipleStorageClusters = len(r.clusters.GetStorageClusters()) > 1
 
 	// Reconcile changes to the cluster
-	result, reconcileError := r.reconcilePhases(sc, request)
+	result, reconcileError := r.reconcilePhases(ctx, sc)
 
 	// Ensure that cephtoolbox is deployed as instructed by the user
 	err = r.ensureToolsDeployment(sc)
@@ -217,7 +218,7 @@ func (r *StorageClusterReconciler) initializeImagesStatus(sc *ocsv1.StorageClust
 }
 
 // validateStorageClusterSpec must be called before reconciling. Any syntactic and semantic errors in the CR must be caught here.
-func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.StorageCluster, request reconcile.Request) error {
+func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.StorageCluster) error {
 	if err := versionCheck(instance, r.Log); err != nil {
 		r.Log.Error(err, "Failed to validate StorageCluster version.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
 		r.recorder.ReportIfNotPresent(instance, corev1.EventTypeWarning, statusutil.EventReasonValidationFailed, err.Error())
@@ -249,7 +250,7 @@ func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.St
 		}
 	}
 
-	if err := validateArbiterSpec(instance, r.Log); err != nil {
+	if err := validateArbiterSpec(instance); err != nil {
 		r.Log.Error(err, "Failed to validate ArbiterSpec.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
 		r.recorder.ReportIfNotPresent(instance, corev1.EventTypeWarning, statusutil.EventReasonValidationFailed, err.Error())
 		instance.Status.Phase = statusutil.PhaseError
@@ -260,7 +261,7 @@ func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.St
 		return err
 	}
 
-	if err := validateOverprovisionControlSpec(instance, r.Log); err != nil {
+	if err := validateOverprovisionControlSpec(instance); err != nil {
 		r.Log.Error(err, "Failed to validate OverprovisionControlSpec.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
 		r.recorder.ReportIfNotPresent(instance, corev1.EventTypeWarning, statusutil.EventReasonValidationFailed, err.Error())
 		instance.Status.Phase = statusutil.PhaseError
@@ -271,7 +272,7 @@ func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.St
 		return err
 	}
 
-	if err := validateCustomStorageClassNames(instance, r.Log); err != nil {
+	if err := validateCustomStorageClassNames(instance); err != nil {
 		r.Log.Error(err, "Failed to validate custom StorageClassNames.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
 		r.recorder.ReportIfNotPresent(instance, corev1.EventTypeWarning, statusutil.EventReasonValidationFailed, err.Error())
 		instance.Status.Phase = statusutil.PhaseError
@@ -286,8 +287,8 @@ func (r *StorageClusterReconciler) validateStorageClusterSpec(instance *ocsv1.St
 }
 
 func (r *StorageClusterReconciler) reconcilePhases(
-	instance *ocsv1.StorageCluster,
-	request reconcile.Request) (reconcile.Result, error) {
+	ctx context.Context,
+	instance *ocsv1.StorageCluster) (reconcile.Result, error) {
 
 	if instance.Spec.ExternalStorage.Enable {
 		r.Log.Info("Reconciling external StorageCluster.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
@@ -303,24 +304,13 @@ func (r *StorageClusterReconciler) reconcilePhases(
 	// If Update request is made and StorageCluster is PhaseIgnored, no need to
 	// proceed further
 	if instance.Status.Phase == "" {
-		isActive, err := r.isActiveStorageCluster(instance)
-		if err != nil {
-			r.Log.Error(err, "StorageCluster could not be reconciled. Retrying.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
-			return reconcile.Result{}, err
-		}
+		isActive := r.isActiveStorageCluster(instance)
 		if !isActive {
 			instance.Status.Phase = statusutil.PhaseIgnored
 			return reconcile.Result{}, nil
 		}
 	} else if instance.Status.Phase == statusutil.PhaseIgnored {
 		return reconcile.Result{}, nil
-	}
-
-	// ensure the ocs-operator-config cm exists & has the correct values
-	err := r.ensureOCSOperatorConfig(instance)
-	if err != nil {
-		r.Log.Error(err, "Failed to ensure ocs-operator-config ConfigMap")
-		return reconcile.Result{}, err
 	}
 
 	if instance.Status.Phase != statusutil.PhaseReady &&
@@ -378,8 +368,14 @@ func (r *StorageClusterReconciler) reconcilePhases(
 			}
 		}
 		r.Log.Info("StorageCluster is terminated, skipping reconciliation.", "StorageCluster", klog.KRef(instance.Namespace, instance.Name))
-		returnErr := r.SetOperatorConditions("Skipping StorageCluster reconciliation", "Terminated", metav1.ConditionTrue, nil)
-		return reconcile.Result{}, returnErr
+
+		// mark operator upgradeable if and only if all other storageclusters are ready or current cluster is the last cluster
+		if r.clusters.AreOtherStorageClustersReady(instance) {
+			returnErr := r.SetOperatorConditions("Skipping StorageCluster reconciliation", "Terminated", metav1.ConditionTrue, nil)
+			return reconcile.Result{}, returnErr
+		}
+
+		return reconcile.Result{}, nil
 	}
 
 	// in-memory conditions should start off empty. It will only ever hold
@@ -473,6 +469,26 @@ func (r *StorageClusterReconciler) reconcilePhases(
 			return returnRes, nil
 		}
 	}
+	// Process resource profiles only if the cluster is not external or provider mode or noobaa standalone, and if the resource profile has changed
+	if !(instance.Spec.ExternalStorage.Enable || instance.Spec.AllowRemoteStorageConsumers || r.IsNoobaaStandalone) &&
+		(instance.Spec.ResourceProfile != instance.Status.LastAppliedResourceProfile) {
+		err := r.ensureResourceProfileChangeApplied(instance)
+		if err != nil {
+			if err == errResourceProfileChangeApplying {
+				reason := ocsv1.ReconcileFailed
+				message := err.Error()
+				statusutil.SetProgressingCondition(&instance.Status.Conditions, reason, message)
+				instance.Status.Phase = statusutil.PhaseProgressing
+				return reconcile.Result{Requeue: true}, nil
+			} else if err == errResourceProfileChangeFailed {
+				reason := ocsv1.ReconcileFailed
+				message := err.Error()
+				statusutil.SetErrorCondition(&instance.Status.Conditions, reason, message)
+				instance.Status.Phase = statusutil.PhaseError
+			}
+			return reconcile.Result{}, err
+		}
+	}
 	// All component operators are in a happy state.
 	if r.conditions == nil {
 		r.Log.Info("No component operator reported negatively.")
@@ -488,9 +504,13 @@ func (r *StorageClusterReconciler) reconcilePhases(
 		// to set upgradeable to true.
 		if instance.Status.Phase != statusutil.PhaseClusterExpanding {
 			instance.Status.Phase = statusutil.PhaseReady
-			returnErr := r.SetOperatorConditions(message, reason, metav1.ConditionTrue, nil)
-			if returnErr != nil {
-				return reconcile.Result{}, returnErr
+
+			// mark operator upgradeable if and only if all storageclusters are ready
+			if r.clusters.AreOtherStorageClustersReady(instance) {
+				returnErr := r.SetOperatorConditions(message, reason, metav1.ConditionTrue, nil)
+				if returnErr != nil {
+					return reconcile.Result{}, returnErr
+				}
 			}
 		}
 	} else {
@@ -543,12 +563,12 @@ func (r *StorageClusterReconciler) reconcilePhases(
 				ReconcileStrategy: string(ReconcileStrategyUnknown),
 			}
 		}
-		if err := r.enableMetricsExporter(instance); err != nil {
+		if err := r.enableMetricsExporter(ctx, instance); err != nil {
 			r.Log.Error(err, "Failed to reconcile metrics exporter.")
 			return reconcile.Result{}, err
 		}
 
-		if err := r.enablePrometheusRules(instance); err != nil {
+		if err := r.enablePrometheusRules(ctx, instance); err != nil {
 			r.Log.Error(err, "Failed to reconcile prometheus rules.")
 			return reconcile.Result{}, err
 		}
@@ -571,10 +591,12 @@ func (r *StorageClusterReconciler) reconcilePhases(
 
 	// Ensure that verbose logging is enabled when RBD mirroring is enabled
 	// TODO: This is a temporary arrangement, this is to be removed when RDR goes to GA
-	result, err := r.ensureRbdMirrorDebugLogging(instance)
-	if !result.IsZero() || err != nil {
-		r.Log.Error(err, "Failed to ensure RBD mirror debug logging.")
-		return result, err
+	if !instance.Spec.ExternalStorage.Enable {
+		result, err := r.ensureRbdMirrorDebugLogging(instance)
+		if !result.IsZero() || err != nil {
+			r.Log.Error(err, "Failed to ensure RBD mirror debug logging.")
+			return result, err
+		}
 	}
 
 	return reconcile.Result{}, nil
@@ -652,12 +674,28 @@ func (r *StorageClusterReconciler) validateStorageDeviceSets(sc *ocsv1.StorageCl
 	return nil
 }
 
-func (r *StorageClusterReconciler) isActiveStorageCluster(instance *ocsv1.StorageCluster) (bool, error) {
+func (r *StorageClusterReconciler) isActiveStorageCluster(instance *ocsv1.StorageCluster) bool {
 
 	// instance is already marked for deletion
 	// do not mark it as active
 	if !instance.GetDeletionTimestamp().IsZero() {
-		return false, nil
+		return false
+	}
+
+	// Ensure that the internal storageCluster is only allowed in the OperatorNamespace.
+	if !instance.Spec.ExternalStorage.Enable && instance.Namespace != r.OperatorNamespace {
+		return false
+	}
+
+	// Do not allow Multiple Storage Clusters with same name
+	if r.clusters.HasMultipleStorageClustersWithSameName(instance.Name) {
+		return false
+	}
+
+	// Do not allow Multiple Storage Clusters in same namespace
+	if r.clusters.HasMultipleStorageClustersInNamespace(instance.Namespace) &&
+		!r.isStorageClusterNotIgnored(instance, r.clusters.GetStorageClustersInNamespace(instance.Namespace)) {
+		return false
 	}
 
 	var storageClusterList []ocsv1.StorageCluster
@@ -669,14 +707,14 @@ func (r *StorageClusterReconciler) isActiveStorageCluster(instance *ocsv1.Storag
 
 	// There is only one StorageCluster i.e. instance
 	if len(storageClusterList) == 1 {
-		return true, nil
+		return true
 	}
 
 	return r.isStorageClusterNotIgnored(instance, storageClusterList)
 }
 
 func (r *StorageClusterReconciler) isStorageClusterNotIgnored(
-	instance *ocsv1.StorageCluster, storageClusters []ocsv1.StorageCluster) (bool, error) {
+	instance *ocsv1.StorageCluster, storageClusters []ocsv1.StorageCluster) bool {
 
 	// There are many StorageClusters. Check if this is Active
 	for n, storageCluster := range storageClusters {
@@ -686,20 +724,20 @@ func (r *StorageClusterReconciler) isStorageClusterNotIgnored(
 			// Tiebreak using CreationTimestamp and Alphanumeric ordering
 			if storageCluster.Status.Phase == "" {
 				if storageCluster.CreationTimestamp.Before(&instance.CreationTimestamp) {
-					return false, nil
+					return false
 				} else if storageCluster.CreationTimestamp.Equal(&instance.CreationTimestamp) && storageCluster.Name < instance.Name {
-					return false, nil
+					return false
 				}
 				if n == len(storageClusters)-1 {
-					return true, nil
+					return true
 				}
 				continue
 			}
-			return false, nil
+			return false
 		}
 	}
 
-	return true, nil
+	return true
 }
 
 // Checks whether a string is contained within a slice
@@ -723,7 +761,7 @@ func remove(slice []string, s string) (result []string) {
 	return
 }
 
-func validateArbiterSpec(sc *ocsv1.StorageCluster, reqLogger logr.Logger) error {
+func validateArbiterSpec(sc *ocsv1.StorageCluster) error {
 
 	if sc.Spec.Arbiter.Enable && sc.Spec.FlexibleScaling {
 		return fmt.Errorf("arbiter and flexibleScaling both can't be enabled")
@@ -734,7 +772,7 @@ func validateArbiterSpec(sc *ocsv1.StorageCluster, reqLogger logr.Logger) error 
 	return nil
 }
 
-func validateOverprovisionControlSpec(sc *ocsv1.StorageCluster, reqLogger logr.Logger) error {
+func validateOverprovisionControlSpec(sc *ocsv1.StorageCluster) error {
 	for _, opc := range sc.Spec.OverprovisionControl {
 		val, ok := opc.Capacity.AsInt64()
 		if !ok {
@@ -753,7 +791,7 @@ func validateOverprovisionControlSpec(sc *ocsv1.StorageCluster, reqLogger logr.L
 	return nil
 }
 
-func validateCustomStorageClassNames(sc *ocsv1.StorageCluster, reqLogger logr.Logger) error {
+func validateCustomStorageClassNames(sc *ocsv1.StorageCluster) error {
 	scMap := make(map[string]bool)
 	duplicateNames := []string{}
 	if sc.Spec.ManagedResources.CephBlockPools.StorageClassName != "" {

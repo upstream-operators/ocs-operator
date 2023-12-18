@@ -2,11 +2,9 @@ package storagecluster
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
-	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 )
 
@@ -111,10 +109,6 @@ func generateNameForCephNetworkFilesystemSC(initData *ocsv1.StorageCluster) stri
 	return fmt.Sprintf("%s-ceph-nfs", initData.Name)
 }
 
-func generateNameForNFSCSIProvisioner(initData *ocsv1.StorageCluster) string {
-	return fmt.Sprintf("%s.nfs.csi.ceph.com", os.Getenv(util.OperatorNamespaceEnvVar))
-}
-
 // generateNameForSnapshotClass function generates 'SnapshotClass' name.
 // 'snapshotType' can be: 'rbdSnapshotter' or 'cephfsSnapshotter' or 'nfsSnapshotter'
 func generateNameForSnapshotClass(initData *ocsv1.StorageCluster, snapshotType SnapshotterType) string {
@@ -170,4 +164,9 @@ func generateCephReplicatedSpec(initData *ocsv1.StorageCluster, poolType string)
 // generateStorageQuotaName function generates a name for ClusterResourceQuota
 func generateStorageQuotaName(storageClassName, quotaName string) string {
 	return fmt.Sprintf("%s-%s", storageClassName, quotaName)
+}
+
+// generateNameForCephSubvolumeGroup function generates a name for CephFilesystemSubVolumeGroup
+func generateNameForCephSubvolumeGroup(filesystemName string) string {
+	return fmt.Sprintf("%s-%s", filesystemName, defaultSubvolumeGroupName)
 }

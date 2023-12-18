@@ -9,6 +9,7 @@ import (
 	"github.com/go-logr/logr"
 	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -30,6 +31,7 @@ const (
 
 	// These are the keys in the ocs-operator-config configmap
 	ClusterNameKey              = "CSI_CLUSTER_NAME"
+	RookCurrentNamespaceOnlyKey = "ROOK_CURRENT_NAMESPACE_ONLY"
 	EnableReadAffinityKey       = "CSI_ENABLE_READ_AFFINITY"
 	CephFSKernelMountOptionsKey = "CSI_CEPHFS_KERNEL_MOUNT_OPTIONS"
 	EnableTopologyKey           = "CSI_ENABLE_TOPOLOGY"
@@ -93,4 +95,26 @@ func RestartPod(ctx context.Context, kubeClient client.Client, logger *logr.Logg
 			}
 		}
 	}
+}
+
+// GetPodsWithLabels gives all the pods that are in a namespace after filtering them based on the given label selector
+func GetPodsWithLabels(ctx context.Context, kubeClient client.Client, namespace string, labelSelector map[string]string) (*corev1.PodList, error) {
+	podList := &corev1.PodList{}
+	if err := kubeClient.List(ctx, podList, client.InNamespace(namespace), &client.ListOptions{
+		LabelSelector: labels.SelectorFromSet(labelSelector),
+	}); err != nil {
+		return nil, err
+	}
+	return podList, nil
+}
+
+// getCountOfRunningPods gives the count of pods in running state in a given pod list
+func GetCountOfRunningPods(podList *corev1.PodList) int {
+	count := 0
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodRunning {
+			count++
+		}
+	}
+	return count
 }

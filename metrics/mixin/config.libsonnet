@@ -2,6 +2,7 @@
   _config+:: {
     // Selectors are inserted between {} in Prometheus queries.
     ocsExporterSelector: 'job="ocs-metrics-exporter"',
+    osdSelector: 'pod=~"rook-ceph-osd-.*"',
 
     // Duration to raise various Alerts
     clusterObjectStoreStateAlertTime: '15s',
@@ -13,6 +14,10 @@
     odfPoolMirroringImageHealthCriticalAlertTime: '10s',
     blockedRBDClientAlertTime: '10s',
     ocsStorageClusterKMSConnectionAlert: '5s',
+    mdsCacheUsageAlertTime: '5m',
+    osdCPULoadHighAlertTime: '15m',
+    mdsSelector: 'pod=~"rook-ceph-mds.*"',
+    mds_cpu_usage_high_threshold_duration: '6h',
 
     // Constants
     objectStorageType: 'RGW',
@@ -22,5 +27,10 @@
     jobs: {
       ocsExporter: $._config.ExporterSelector,
     },
+
+    // Storage Consumer
+    clientCheckinWarnSec: 120,
+    clientCheckinCritSec: 300,
+    clientOperatorMinorVerDiff: 1,
   },
 }

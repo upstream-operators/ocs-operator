@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	v1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	v1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	"github.com/stretchr/testify/assert"
@@ -149,85 +149,6 @@ func TestEnsureToolsDeploymentUpdate(t *testing.T) {
 		} else {
 			assert.Errorf(t, err, "[%s] failed to delete ceph tools deployment when it was disabled in the spec", tc.label)
 		}
-	}
-}
-
-func TestRemoveDuplicateTolerations(t *testing.T) {
-	testcases := []struct {
-		label       string
-		tolerations []corev1.Toleration
-		expected    []corev1.Toleration
-	}{
-		{
-			label: "Case 1",
-			tolerations: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-			expected: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-		},
-		{
-			label: "Case 2",
-			tolerations: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}, {
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-			expected: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-		},
-		{
-			label: "Case 3",
-			tolerations: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}, {
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}, {
-				Key:      "test-toleration-2",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-			expected: []corev1.Toleration{{
-				Key:      "test-toleration",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}, {
-				Key:      "test-toleration-2",
-				Operator: corev1.TolerationOpEqual,
-				Value:    "true",
-				Effect:   corev1.TaintEffectNoSchedule,
-			}},
-		},
-	}
-
-	for _, tc := range testcases {
-		actual := removeDuplicateTolerations(tc.tolerations)
-		assert.Equalf(t, tc.expected, actual, "[%s] failed to remove duplicate tolerations", tc.label)
 	}
 }
 

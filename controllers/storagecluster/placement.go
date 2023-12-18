@@ -1,7 +1,7 @@
 package storagecluster
 
 import (
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 
@@ -61,7 +61,7 @@ func getPlacement(sc *ocsv1.StorageCluster, component string) rookCephv1.Placeme
 
 	topologyKey := getFailureDomain(sc)
 	topologyKey, _ = topologyMap.GetKeyValues(topologyKey)
-	if component == "mon" || component == "mds" || (component == "rgw" && getCephObjectStoreGatewayInstances(sc) > 1) {
+	if component == "mon" || component == "mds" || component == "rgw" {
 		if placement.PodAntiAffinity != nil {
 			if placement.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution != nil {
 				for i := range placement.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution {

@@ -12,8 +12,8 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	v1 "github.com/openshift/api/config/v1"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
-	api "github.com/red-hat-storage/ocs-operator/v4/api/v1"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	api "github.com/red-hat-storage/ocs-operator/api/v4/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/defaults"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
 	ocsutil "github.com/red-hat-storage/ocs-operator/v4/controllers/util"
@@ -92,7 +92,7 @@ func TestEnsureCephCluster(t *testing.T) {
 
 		reconciler := createFakeStorageClusterReconciler(t, networkConfig)
 
-		expected, err := newCephCluster(mockStorageCluster.DeepCopy(), "", 3, reconciler.serverVersion, nil, log)
+		expected, err := newCephCluster(mockStorageCluster.DeepCopy(), "", reconciler.serverVersion, nil, log)
 		assert.NilError(t, err)
 		expected.Status.State = c.cephClusterState
 
@@ -210,7 +210,7 @@ func TestCephClusterMonTimeout(t *testing.T) {
 		_, err := obj.ensureCreated(&reconciler, sc)
 		assert.NilError(t, err)
 
-		cc, err := newCephCluster(sc, "", 3, reconciler.serverVersion, nil, log)
+		cc, err := newCephCluster(sc, "", reconciler.serverVersion, nil, log)
 		assert.NilError(t, err)
 		err = reconciler.Client.Get(context.TODO(), mockCephClusterNamespacedName, cc)
 		assert.NilError(t, err)
@@ -276,7 +276,7 @@ func TestNewCephClusterMonData(t *testing.T) {
 		c.sc.Spec.MonDataDirHostPath = c.monDataPath
 		c.sc.Status.Images.Ceph = &api.ComponentImageStatus{}
 
-		actual, err := newCephCluster(c.sc, "", 3, serverVersion, nil, log)
+		actual, err := newCephCluster(c.sc, "", serverVersion, nil, log)
 		assert.NilError(t, err)
 		assert.Equal(t, generateNameForCephCluster(c.sc), actual.Name)
 		assert.Equal(t, c.sc.Namespace, actual.Namespace)
@@ -308,7 +308,51 @@ func TestGenerateMgrSpec(t *testing.T) {
 			label: "Default case",
 			sc:    &api.StorageCluster{},
 			expectedMgr: cephv1.MgrSpec{
-				Count: defaults.DefaultMgrCount,
+				Count:                defaults.DefaultMgrCount,
+				AllowMultiplePerNode: false,
+				Modules: []cephv1.Module{
+					{Name: "pg_autoscaler", Enabled: true},
+					{Name: "balancer", Enabled: true},
+				},
+			},
+		},
+		{
+			label: "MgrCount is set to 1 on the storageCluster CR Spec",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					ManagedResources: api.ManagedResourcesSpec{
+						CephCluster: api.ManageCephCluster{
+							MgrCount: 1,
+						},
+					},
+				},
+			},
+			expectedMgr: cephv1.MgrSpec{
+				Count:                1,
+				AllowMultiplePerNode: false,
+				Modules: []cephv1.Module{
+					{Name: "pg_autoscaler", Enabled: true},
+					{Name: "balancer", Enabled: true},
+				},
+			},
+		},
+		{
+			label: "MgrCount is set to 1 on the storageCluster CR Spec & it's arbiter mode",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					Arbiter: api.ArbiterSpec{
+						Enable: true,
+					},
+					ManagedResources: api.ManagedResourcesSpec{
+						CephCluster: api.ManageCephCluster{
+							MgrCount: 1,
+						},
+					},
+				},
+			},
+			expectedMgr: cephv1.MgrSpec{
+				Count:                2,
+				AllowMultiplePerNode: false,
 				Modules: []cephv1.Module{
 					{Name: "pg_autoscaler", Enabled: true},
 					{Name: "balancer", Enabled: true},
@@ -320,7 +364,8 @@ func TestGenerateMgrSpec(t *testing.T) {
 			sc:           &api.StorageCluster{},
 			isSingleNode: true,
 			expectedMgr: cephv1.MgrSpec{
-				Count: 1,
+				Count:                1,
+				AllowMultiplePerNode: true,
 				Modules: []cephv1.Module{
 					{Name: "pg_autoscaler", Enabled: true},
 					{Name: "balancer", Enabled: true},
@@ -335,6 +380,111 @@ func TestGenerateMgrSpec(t *testing.T) {
 		actual := generateMgrSpec(c.sc)
 		assert.DeepEqual(t, c.expectedMgr, actual)
 	}
+}
+
+func TestGenerateMonSpec(t *testing.T) {
+	arbiterSc := &api.StorageCluster{
+		Spec: api.StorageClusterSpec{
+			Arbiter: api.ArbiterSpec{
+				Enable: true,
+			},
+			NodeTopologies: &api.NodeTopologyMap{
+				ArbiterLocation: "zone3",
+			},
+		},
+		Status: api.StorageClusterStatus{
+			NodeTopologies: &api.NodeTopologyMap{
+				Labels: map[string]api.TopologyLabelValues{
+					zoneTopologyLabel: []string{
+						"zone1",
+						"zone2",
+					},
+				},
+				ArbiterLocation: "zone3",
+			},
+			FailureDomain:       "zone",
+			FailureDomainKey:    zoneTopologyLabel,
+			FailureDomainValues: []string{"zone1", "zone2"},
+		},
+	}
+
+	cases := []struct {
+		label        string
+		sc           *api.StorageCluster
+		isSingleNode bool
+		expectedMon  cephv1.MonSpec
+	}{
+		{
+			label: "Default case",
+			sc:    &api.StorageCluster{},
+			expectedMon: cephv1.MonSpec{
+				Count:                defaults.DefaultMonCount,
+				AllowMultiplePerNode: false,
+			},
+		},
+		{
+			label: "MonCount is set to 5 on the storageCluster CR Spec",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					ManagedResources: api.ManagedResourcesSpec{
+						CephCluster: api.ManageCephCluster{
+							MonCount: 5,
+						},
+					},
+				},
+			},
+			expectedMon: cephv1.MonSpec{
+				Count:                5,
+				AllowMultiplePerNode: false,
+			},
+		},
+		{
+			label: "Arbiter Mode",
+			sc:    arbiterSc,
+			expectedMon: cephv1.MonSpec{
+				Count:                defaults.ArbiterModeMonCount,
+				AllowMultiplePerNode: false,
+				StretchCluster:       generateStretchClusterSpec(arbiterSc),
+			},
+		},
+		{
+			label: "Arbiter Mode with MonCount set to 3 on the storageCluster CR Spec",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					ManagedResources: api.ManagedResourcesSpec{
+						CephCluster: api.ManageCephCluster{
+							MonCount: 3,
+						},
+					},
+					Arbiter:        arbiterSc.Spec.Arbiter,
+					NodeTopologies: arbiterSc.Spec.NodeTopologies,
+				},
+				Status: arbiterSc.Status,
+			},
+			expectedMon: cephv1.MonSpec{
+				Count:                5,
+				AllowMultiplePerNode: false,
+				StretchCluster:       generateStretchClusterSpec(arbiterSc),
+			},
+		},
+		{
+			label:        "Single node deployment",
+			sc:           &api.StorageCluster{},
+			isSingleNode: true,
+			expectedMon: cephv1.MonSpec{
+				Count:                3,
+				AllowMultiplePerNode: true,
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Logf("Case: %s\n", c.label)
+		t.Setenv(util.SingleNodeEnvVar, strconv.FormatBool(c.isSingleNode))
+		actual := generateMonSpec(c.sc)
+		assert.DeepEqual(t, c.expectedMon, actual)
+	}
+
 }
 
 func TestStorageClassDeviceSetCreation(t *testing.T) {
@@ -430,7 +580,7 @@ func TestStorageClassDeviceSetCreation(t *testing.T) {
 		for i, scds := range actual {
 			assert.Equal(t, fmt.Sprintf("%s-%d", deviceSet.Name, i), scds.Name)
 			assert.Equal(t, deviceSet.Count/3, scds.Count)
-			assert.DeepEqual(t, defaults.DaemonResources["osd"], scds.Resources)
+			assert.DeepEqual(t, defaults.GetProfileDaemonResources("osd", c.sc), scds.Resources)
 			assert.DeepEqual(t, deviceSet.DataPVCTemplate, scds.VolumeClaimTemplates[0])
 			assert.Equal(t, true, scds.Portable)
 			assert.Equal(t, c.sc.Spec.Encryption.ClusterWide, scds.Encrypted)
@@ -496,7 +646,7 @@ func TestStorageClassDeviceSetCreation(t *testing.T) {
 		for i, scds := range actual {
 			assert.Equal(t, fmt.Sprintf("%s-%d", deviceSet.Name, i), scds.Name)
 			assert.Equal(t, deviceSet.Count/3, scds.Count)
-			assert.DeepEqual(t, defaults.DaemonResources["osd"], scds.Resources)
+			assert.DeepEqual(t, defaults.GetProfileDaemonResources("osd", c.sc), scds.Resources)
 			assert.DeepEqual(t, deviceSet.DataPVCTemplate, scds.VolumeClaimTemplates[0])
 			assert.Equal(t, true, scds.Portable)
 			assert.Equal(t, c.sc.Spec.Encryption.ClusterWide, scds.Encrypted)
@@ -729,7 +879,7 @@ func TestStorageClassDeviceSetCreationForArbiter(t *testing.T) {
 		for i, scds := range actual {
 			assert.Equal(t, fmt.Sprintf("%s-%d", deviceSet.Name, i), scds.Name)
 			assert.Equal(t, deviceSet.Count, scds.Count)
-			assert.DeepEqual(t, defaults.DaemonResources["osd"], scds.Resources)
+			assert.DeepEqual(t, defaults.GetProfileDaemonResources("osd", c.sc), scds.Resources)
 			assert.DeepEqual(t, deviceSet.DataPVCTemplate, scds.VolumeClaimTemplates[0])
 			assert.Equal(t, true, scds.Portable)
 			assert.Equal(t, c.sc.Spec.Encryption.ClusterWide, scds.Encrypted)
@@ -746,29 +896,66 @@ func TestNewCephDaemonResources(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		spec     *api.StorageCluster
+		sc       *api.StorageCluster
 		expected map[string]corev1.ResourceRequirements
 	}{
 		{
-			name: "When nothing is passed to StorageCluster.Spec.Resources (Defaults)",
-			spec: &api.StorageCluster{
+			name: "No ResourceRequirements are set & No ResourceProfile is set",
+			sc: &api.StorageCluster{
 				Spec: api.StorageClusterSpec{
 					Resources: map[string]corev1.ResourceRequirements{},
 				},
 			},
 			expected: map[string]corev1.ResourceRequirements{
-				"mon": defaults.DaemonResources["mon"],
-				"mgr": defaults.DaemonResources["mgr"],
-				"mds": defaults.DaemonResources["mds"],
-				"rgw": defaults.DaemonResources["rgw"],
+				"mgr": defaults.BalancedDaemonResources["mgr"],
+				"mon": defaults.BalancedDaemonResources["mon"],
 			},
 		},
 		{
-			name: "Overriding defaults",
-			spec: &api.StorageCluster{
+			name: "No ResourceRequirements are set & ResourceProfile is `lean`",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					Resources:       map[string]corev1.ResourceRequirements{},
+					ResourceProfile: "lean",
+				},
+			},
+			expected: map[string]corev1.ResourceRequirements{
+				"mgr": defaults.LeanDaemonResources["mgr"],
+				"mon": defaults.LeanDaemonResources["mon"],
+			},
+		},
+		{
+			name: "No ResourceRequirements are set & ResourceProfile is `balanced`",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					Resources:       map[string]corev1.ResourceRequirements{},
+					ResourceProfile: "balanced",
+				},
+			},
+			expected: map[string]corev1.ResourceRequirements{
+				"mgr": defaults.BalancedDaemonResources["mgr"],
+				"mon": defaults.BalancedDaemonResources["mon"],
+			},
+		},
+		{
+			name: "No ResourceRequirements are set & ResourceProfile is `performance`",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					Resources:       map[string]corev1.ResourceRequirements{},
+					ResourceProfile: "performance",
+				},
+			},
+			expected: map[string]corev1.ResourceRequirements{
+				"mgr": defaults.PerformanceDaemonResources["mgr"],
+				"mon": defaults.PerformanceDaemonResources["mon"],
+			},
+		},
+		{
+			name: "Some ResourceRequirements are passed & ResourceProfile is not set",
+			sc: &api.StorageCluster{
 				Spec: api.StorageClusterSpec{
 					Resources: map[string]corev1.ResourceRequirements{
-						"mds": {
+						"mon": {
 							Requests: corev1.ResourceList{
 								corev1.ResourceCPU:    resource.MustParse("6"),
 								corev1.ResourceMemory: resource.MustParse("16Gi"),
@@ -782,9 +969,8 @@ func TestNewCephDaemonResources(t *testing.T) {
 				},
 			},
 			expected: map[string]corev1.ResourceRequirements{
-				"mon": defaults.DaemonResources["mon"],
-				"mgr": defaults.DaemonResources["mgr"],
-				"mds": {
+				"mgr": defaults.BalancedDaemonResources["mgr"],
+				"mon": {
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("6"),
 						corev1.ResourceMemory: resource.MustParse("16Gi"),
@@ -794,12 +980,44 @@ func TestNewCephDaemonResources(t *testing.T) {
 						corev1.ResourceMemory: resource.MustParse("16Gi"),
 					},
 				},
-				"rgw": defaults.DaemonResources["rgw"],
 			},
 		},
 		{
-			name: "Passing a new key",
-			spec: &api.StorageCluster{
+			name: "Some ResourceRequirements are passed & ResourceProfile is also set",
+			sc: &api.StorageCluster{
+				Spec: api.StorageClusterSpec{
+					Resources: map[string]corev1.ResourceRequirements{
+						"mgr": {
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("6"),
+								corev1.ResourceMemory: resource.MustParse("16Gi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("6"),
+								corev1.ResourceMemory: resource.MustParse("16Gi"),
+							},
+						},
+					},
+					ResourceProfile: "performance",
+				},
+			},
+			expected: map[string]corev1.ResourceRequirements{
+				"mgr": {
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("6"),
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("6"),
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
+					},
+				},
+				"mon": defaults.PerformanceDaemonResources["mon"],
+			},
+		},
+		{
+			name: "Some new custom ResourceRequirements are passed & ResourceProfile is not set",
+			sc: &api.StorageCluster{
 				Spec: api.StorageClusterSpec{
 					Resources: map[string]corev1.ResourceRequirements{
 						"crashcollector": {
@@ -816,10 +1034,8 @@ func TestNewCephDaemonResources(t *testing.T) {
 				},
 			},
 			expected: map[string]corev1.ResourceRequirements{
-				"mon": defaults.DaemonResources["mon"],
-				"mgr": defaults.DaemonResources["mgr"],
-				"mds": defaults.DaemonResources["mds"],
-				"rgw": defaults.DaemonResources["rgw"],
+				"mon": defaults.BalancedDaemonResources["mon"],
+				"mgr": defaults.BalancedDaemonResources["mgr"],
 				"crashcollector": {
 					Requests: corev1.ResourceList{
 						corev1.ResourceCPU:    resource.MustParse("6"),
@@ -833,28 +1049,44 @@ func TestNewCephDaemonResources(t *testing.T) {
 			},
 		},
 		{
-			name: "When nothing is passed to StorageCluster.Spec.Resources (Defaults) and arbiter is enabled",
-			spec: &api.StorageCluster{
+			name: "Some new custom ResourceRequirements are passed & ResourceProfile is also set",
+			sc: &api.StorageCluster{
 				Spec: api.StorageClusterSpec{
-					Resources: map[string]corev1.ResourceRequirements{},
-					Arbiter: api.ArbiterSpec{
-						Enable: true,
+					Resources: map[string]corev1.ResourceRequirements{
+						"crashcollector": {
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("6"),
+								corev1.ResourceMemory: resource.MustParse("16Gi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("6"),
+								corev1.ResourceMemory: resource.MustParse("16Gi"),
+							},
+						},
 					},
+					ResourceProfile: "lean",
 				},
 			},
 			expected: map[string]corev1.ResourceRequirements{
-				"mon":         defaults.DaemonResources["mon"],
-				"mgr":         defaults.DaemonResources["mgr"],
-				"mds":         defaults.DaemonResources["mds"],
-				"rgw":         defaults.DaemonResources["rgw"],
-				"mgr-sidecar": defaults.DaemonResources["mgr-sidecar"],
+				"mgr": defaults.LeanDaemonResources["mgr"],
+				"mon": defaults.LeanDaemonResources["mon"],
+				"crashcollector": {
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("6"),
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("6"),
+						corev1.ResourceMemory: resource.MustParse("16Gi"),
+					},
+				},
 			},
 		},
 	}
 
 	for _, c := range cases {
 		t.Logf("Case: %s\n", c.name)
-		got := newCephDaemonResources(c.spec)
+		got := newCephDaemonResources(c.sc)
 		assert.DeepEqual(t, c.expected, got)
 	}
 }
@@ -1091,13 +1323,13 @@ func TestLogCollector(t *testing.T) {
 	sc.Spec.LogCollector = &defaultLogCollector
 
 	r := createFakeStorageClusterReconciler(t)
-	actual, err := newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+	actual, err := newCephCluster(sc, "", r.serverVersion, nil, log)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, actual.Spec.LogCollector, defaultLogCollector)
 
 	// when disabled in storageCluster
 	sc.Spec.LogCollector = &cephv1.LogCollectorSpec{}
-	actual, err = newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+	actual, err = newCephCluster(sc, "", r.serverVersion, nil, log)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, actual.Spec.LogCollector, defaultLogCollector)
 
@@ -1105,7 +1337,7 @@ func TestLogCollector(t *testing.T) {
 	assert.NilError(t, err)
 	sc.Spec.LogCollector.MaxLogSize = &maxLogSize
 
-	actual, err = newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+	actual, err = newCephCluster(sc, "", r.serverVersion, nil, log)
 	assert.NilError(t, err)
 	assert.DeepEqual(t, actual.Spec.LogCollector.MaxLogSize, &maxLogSize)
 }
@@ -1234,7 +1466,7 @@ func TestCephClusterNetworkConnectionsSpec(t *testing.T) {
 		mockStorageCluster.DeepCopyInto(sc)
 		sc.Spec.Network = testCase.scSpec.Network
 		sc.Spec.ExternalStorage.Enable = true
-		cc := newExternalCephCluster(sc, "", "", "")
+		cc := newExternalCephCluster(sc, "", "")
 		assert.DeepEqual(t, cc.Spec.Network.Connections, testCase.ccSpec.Network.Connections)
 	}
 	// Test for internal mode
@@ -1246,7 +1478,7 @@ func TestCephClusterNetworkConnectionsSpec(t *testing.T) {
 		sc.Spec.Network = testCase.scSpec.Network
 		reconciler := createFakeStorageClusterReconciler(t)
 		testCase.ccSpec.Network.Connections.RequireMsgr2 = true
-		cc, _ := newCephCluster(sc, "", 3, reconciler.serverVersion, nil, log)
+		cc, _ := newCephCluster(sc, "", reconciler.serverVersion, nil, log)
 		assert.DeepEqual(t, cc.Spec.Network.Connections, testCase.ccSpec.Network.Connections)
 	}
 }
@@ -1320,7 +1552,7 @@ func TestCephClusterStoreType(t *testing.T) {
 	r := createFakeStorageClusterReconciler(t)
 
 	t.Run("ensure no bluestore optimization", func(t *testing.T) {
-		actual, err := newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+		actual, err := newCephCluster(sc, "", r.serverVersion, nil, log)
 		assert.NilError(t, err)
 		assert.Equal(t, "", actual.Spec.Storage.Store.Type)
 	})
@@ -1330,14 +1562,14 @@ func TestCephClusterStoreType(t *testing.T) {
 			DisasterRecoveryTargetAnnotation: "true",
 		}
 		sc.Annotations = annotations
-		actual, err := newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+		actual, err := newCephCluster(sc, "", r.serverVersion, nil, log)
 		assert.NilError(t, err)
 		assert.Equal(t, "bluestore-rdr", actual.Spec.Storage.Store.Type)
 	})
 
 	t.Run("ensure no bluestore optimization for external clusters", func(t *testing.T) {
 		sc.Spec.ExternalStorage.Enable = true
-		actual, err := newCephCluster(sc, "", 3, r.serverVersion, nil, log)
+		actual, err := newCephCluster(sc, "", r.serverVersion, nil, log)
 		assert.NilError(t, err)
 		assert.Equal(t, "", actual.Spec.Storage.Store.Type)
 	})
@@ -1368,4 +1600,32 @@ func TestEnsureRDROptmizations(t *testing.T) {
 	err = reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: generateNameForCephClusterFromString(sc.Name), Namespace: sc.Namespace}, actual)
 	assert.NilError(t, err)
 	assert.Equal(t, string(rookCephv1.StoreTypeBlueStoreRDR), actual.Spec.Storage.Store.Type)
+}
+
+func TestEnsureRDRMigration(t *testing.T) {
+	sc := &api.StorageCluster{}
+	mockStorageCluster.DeepCopyInto(sc)
+	sc.Status.Images.Ceph = &api.ComponentImageStatus{}
+	reconciler := createFakeStorageClusterReconciler(t, networkConfig)
+
+	// Ensure bluestore store type if RDR optimization annotation is not added
+	var obj ocsCephCluster
+	_, err := obj.ensureCreated(&reconciler, sc)
+	assert.NilError(t, err)
+	actual := &cephv1.CephCluster{}
+	err = reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: generateNameForCephClusterFromString(sc.Name), Namespace: sc.Namespace}, actual)
+	assert.NilError(t, err)
+	assert.Equal(t, "", actual.Spec.Storage.Store.Type)
+	assert.Equal(t, "", actual.Spec.Storage.Store.UpdateStore)
+
+	// Ensure bluestoreRDR migration is set if RDR optimization annotation is added later on
+	testSkipPrometheusRules = true
+	sc.Annotations[DisasterRecoveryTargetAnnotation] = "true"
+	_, err = obj.ensureCreated(&reconciler, sc)
+	assert.NilError(t, err)
+	actual = &cephv1.CephCluster{}
+	err = reconciler.Client.Get(context.TODO(), types.NamespacedName{Name: generateNameForCephClusterFromString(sc.Name), Namespace: sc.Namespace}, actual)
+	assert.NilError(t, err)
+	assert.Equal(t, string(rookCephv1.StoreTypeBlueStoreRDR), actual.Spec.Storage.Store.Type)
+	assert.Equal(t, "yes-really-update-store", actual.Spec.Storage.Store.UpdateStore)
 }

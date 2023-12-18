@@ -21,9 +21,7 @@ import (
 	ocsversion "github.com/red-hat-storage/ocs-operator/v4/version"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbac "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -135,6 +133,10 @@ func unmarshalCSV(filePath string) *csvv1.ClusterServiceVersion {
 	if strings.Contains(csv.Name, "ocs") || strings.Contains(csv.Name, "ics") {
 		vars := []corev1.EnvVar{
 			{
+				Name:  "OCS_METRICS_EXPORTER_IMAGE",
+				Value: *ocsMetricsExporterImage,
+			},
+			{
 				Name:  "ROOK_CEPH_IMAGE",
 				Value: *rookContainerImage,
 			},
@@ -170,8 +172,15 @@ func unmarshalCSV(filePath string) *csvv1.ClusterServiceVersion {
 	} else if strings.Contains(csv.Name, "rook") || strings.Contains(csv.Name, "ceph") {
 		vars := []corev1.EnvVar{
 			{
-				Name:  "ROOK_CURRENT_NAMESPACE_ONLY",
-				Value: "true",
+				Name: "ROOK_CURRENT_NAMESPACE_ONLY",
+				ValueFrom: &corev1.EnvVarSource{
+					ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{
+							Name: "ocs-operator-config",
+						},
+						Key: "ROOK_CURRENT_NAMESPACE_ONLY",
+					},
+				},
 			},
 			{
 				Name:  "ROOK_ALLOW_MULTIPLE_FILESYSTEMS",
@@ -257,28 +266,6 @@ func unmarshalCSV(filePath string) *csvv1.ClusterServiceVersion {
 							Name: "ocs-operator-config",
 						},
 						Key: "CSI_CLUSTER_NAME",
-					},
-				},
-			},
-			{
-				Name: "CSI_ENABLE_READ_AFFINITY",
-				ValueFrom: &corev1.EnvVarSource{
-					ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "ocs-operator-config",
-						},
-						Key: "CSI_ENABLE_READ_AFFINITY",
-					},
-				},
-			},
-			{
-				Name: "CSI_CEPHFS_KERNEL_MOUNT_OPTIONS",
-				ValueFrom: &corev1.EnvVarSource{
-					ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{
-							Name: "ocs-operator-config",
-						},
-						Key: "CSI_CEPHFS_KERNEL_MOUNT_OPTIONS",
 					},
 				},
 			},
@@ -555,29 +542,12 @@ func generateUnifiedCSV() *csvv1.ClusterServiceVersion {
 
 	}
 
-	// Add metrics exporter deployment to CSV
-	metricExporterStrategySpec := csvv1.StrategyDeploymentSpec{
-		Name: "ocs-metrics-exporter",
-		Spec: getMetricsExporterDeployment(),
-	}
-	templateStrategySpec.DeploymentSpecs = append(templateStrategySpec.DeploymentSpecs, metricExporterStrategySpec)
-
 	// Add tolerations to deployments
 	for i := range templateStrategySpec.DeploymentSpecs {
 		d := &templateStrategySpec.DeploymentSpecs[i]
 		d.Spec.Template.Spec.Tolerations = ocsNodeToleration
 	}
 
-	templateStrategySpec.ClusterPermissions = append(templateStrategySpec.ClusterPermissions, csvv1.StrategyDeploymentPermissions{
-		ServiceAccountName: "ocs-metrics-exporter",
-		Rules: []rbac.PolicyRule{
-			{
-				APIGroups: []string{"monitoring.coreos.com"},
-				Resources: []string{"*"},
-				Verbs:     []string{"*"},
-			},
-		},
-	})
 	fmt.Println(templateStrategySpec.DeploymentSpecs)
 
 	// Set correct csv versions and name
@@ -934,82 +904,6 @@ func copyManifests() {
 		outputPath := filepath.Join(*outputDir, manifest.Name())
 		copyFile(inputPath, outputPath)
 	}
-}
-
-func getMetricsExporterDeployment() appsv1.DeploymentSpec {
-	replica := int32(1)
-	privileged := false
-	noRoot := true
-	deployment := appsv1.DeploymentSpec{
-		Replicas: &replica,
-		Selector: &metav1.LabelSelector{
-			MatchLabels: map[string]string{
-				"app.kubernetes.io/component": "ocs-metrics-exporter",
-				"app.kubernetes.io/name":      "ocs-metrics-exporter",
-			},
-		},
-		Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					"app.kubernetes.io/component": "ocs-metrics-exporter",
-					"app.kubernetes.io/name":      "ocs-metrics-exporter",
-					"app.kubernetes.io/version":   "0.0.1",
-				},
-			},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{
-					{
-						Name: "ocs-metrics-exporter",
-						SecurityContext: &corev1.SecurityContext{
-							Privileged:   &privileged,
-							RunAsNonRoot: &noRoot,
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{
-								Name:      "ceph-config",
-								MountPath: "/etc/ceph",
-							},
-						},
-						Image:   *ocsMetricsExporterImage,
-						Command: []string{"/usr/local/bin/metrics-exporter"},
-						Args:    []string{"--namespaces=$(WATCH_NAMESPACE)"},
-						Env: []corev1.EnvVar{
-							{
-								Name: "WATCH_NAMESPACE",
-								ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{
-										FieldPath: "metadata.namespace",
-									},
-								},
-							},
-						},
-						Ports: []corev1.ContainerPort{
-							{
-								ContainerPort: 8080,
-							},
-							{
-								ContainerPort: 8081,
-							},
-						},
-					},
-				},
-				Volumes: []corev1.Volume{
-					{
-						Name: "ceph-config",
-						VolumeSource: corev1.VolumeSource{
-							ConfigMap: &corev1.ConfigMapVolumeSource{
-								LocalObjectReference: corev1.LocalObjectReference{
-									Name: "ocs-metrics-exporter-ceph-conf",
-								},
-							},
-						},
-					},
-				},
-				ServiceAccountName: "ocs-metrics-exporter",
-			},
-		},
-	}
-	return deployment
 }
 
 func main() {

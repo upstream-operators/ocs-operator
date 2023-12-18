@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"testing"
 
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
 	controllers "github.com/red-hat-storage/ocs-operator/v4/controllers/storageconsumer"
 	pb "github.com/red-hat-storage/ocs-operator/v4/services/provider/pb"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
@@ -17,6 +17,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	crClient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type externalResource struct {
@@ -138,7 +139,7 @@ var (
 
 func TestGetExternalResources(t *testing.T) {
 	ctx := context.TODO()
-	objects := []runtime.Object{
+	objects := []crClient.Object{
 		consumerResource,
 		consumerResource1,
 		consumerResource2,
@@ -278,7 +279,7 @@ func TestGetExternalResources(t *testing.T) {
 	assert.Nil(t, storageConRes)
 
 	// When CephClient status is empty
-	objects = []runtime.Object{
+	objects = []crClient.Object{
 		&rookCephv1.CephClient{},
 	}
 	s := runtime.NewScheme()
@@ -303,7 +304,7 @@ func TestGetExternalResources(t *testing.T) {
 
 	// When CephClient status info is empty
 
-	objects = []runtime.Object{
+	objects = []crClient.Object{
 		&rookCephv1.CephClient{},
 	}
 	s = runtime.NewScheme()
@@ -384,7 +385,7 @@ func TestOCSProviderServerStorageClassRequest(t *testing.T) {
 	}
 
 	ctx := context.TODO()
-	objects := []runtime.Object{
+	objects := []crClient.Object{
 		consumerResource,
 		claimResourceUnderDeletion,
 	}
@@ -395,7 +396,7 @@ func TestOCSProviderServerStorageClassRequest(t *testing.T) {
 	consumerManager, err := newConsumerManager(ctx, client, serverNamespace)
 	assert.NoError(t, err)
 
-	storageClassRequestManager, err := newStorageClassRequestManager(ctx, client, serverNamespace)
+	storageClassRequestManager, err := newStorageClassRequestManager(client, serverNamespace)
 	assert.NoError(t, err)
 
 	server := &OCSProviderServer{
@@ -450,7 +451,7 @@ func TestOCSProviderServerRevokeStorageClassClaim(t *testing.T) {
 	}
 
 	ctx := context.TODO()
-	objects := []runtime.Object{
+	objects := []crClient.Object{
 		consumerResource,
 		claimResource,
 	}
@@ -461,7 +462,7 @@ func TestOCSProviderServerRevokeStorageClassClaim(t *testing.T) {
 	consumerManager, err := newConsumerManager(ctx, client, serverNamespace)
 	assert.NoError(t, err)
 
-	storageRequestManager, err := newStorageClassRequestManager(ctx, client, serverNamespace)
+	storageRequestManager, err := newStorageClassRequestManager(client, serverNamespace)
 	assert.NoError(t, err)
 
 	server := &OCSProviderServer{
@@ -668,7 +669,7 @@ func TestOCSProviderServerGetStorageClassClaimConfig(t *testing.T) {
 	)
 
 	ctx := context.TODO()
-	objects := []runtime.Object{
+	objects := []crClient.Object{
 		consumerResource,
 		blockPoolClaimResource,
 		sharedFilesystemClaimResource,
@@ -683,7 +684,7 @@ func TestOCSProviderServerGetStorageClassClaimConfig(t *testing.T) {
 	consumerManager, err := newConsumerManager(ctx, client, serverNamespace)
 	assert.NoError(t, err)
 
-	storageClassRequestManager, err := newStorageClassRequestManager(ctx, client, serverNamespace)
+	storageClassRequestManager, err := newStorageClassRequestManager(client, serverNamespace)
 	assert.NoError(t, err)
 
 	server := &OCSProviderServer{

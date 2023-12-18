@@ -8,7 +8,6 @@ import (
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	rookclient "github.com/rook/rook/pkg/client/clientset/versioned"
 	cephv1listers "github.com/rook/rook/pkg/client/listers/ceph.rook.io/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -41,8 +40,8 @@ func (c *CephClusterAdvancedFeatureProvider) AdvancedFeature(namespaces ...strin
 	return 0
 }
 
-func NewCephClusterAdvancedFeatureProvider(client *rookclient.Clientset) AdvancedFeatureProvider {
-	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephclusters", metav1.NamespaceAll, fields.Everything())
+func NewCephClusterAdvancedFeatureProvider(opts *options.Options, client *rookclient.Clientset) AdvancedFeatureProvider {
+	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephclusters", searchInNamespace(opts), fields.Everything())
 	return &CephClusterAdvancedFeatureProvider{
 		SharedIndexInformer: cache.NewSharedIndexInformer(lw, &cephv1.CephCluster{}, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}),
 	}
@@ -66,8 +65,8 @@ func (c *CephObjectStoreAdvancedFeatureProvider) AdvancedFeature(namespaces ...s
 	return 0
 }
 
-func NewCephObjectStoreAdvancedFeatureProvider(client *rookclient.Clientset) AdvancedFeatureProvider {
-	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephobjectstores", metav1.NamespaceAll, fields.Everything())
+func NewCephObjectStoreAdvancedFeatureProvider(opts *options.Options, client *rookclient.Clientset) AdvancedFeatureProvider {
+	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephobjectstores", searchInNamespace(opts), fields.Everything())
 	return &CephObjectStoreAdvancedFeatureProvider{
 		SharedIndexInformer: cache.NewSharedIndexInformer(lw, &cephv1.CephObjectStore{}, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}),
 	}
@@ -77,9 +76,9 @@ type StorageClassAdvancedFeatureProvider struct {
 	cache.SharedIndexInformer
 }
 
-func (s *StorageClassAdvancedFeatureProvider) AdvancedFeature(namespaces ...string) int {
+func (s *StorageClassAdvancedFeatureProvider) AdvancedFeature(_ ...string) int {
 	storageClassLister := storagev1listers.NewStorageClassLister(s.GetIndexer())
-	storageClasses := getAllStorageClasses(storageClassLister, namespaces)
+	storageClasses := getAllStorageClasses(storageClassLister)
 	for _, storageClass := range storageClasses {
 		if storageClass.Parameters["encrypted"] == "true" {
 			return 1
@@ -90,7 +89,9 @@ func (s *StorageClassAdvancedFeatureProvider) AdvancedFeature(namespaces ...stri
 
 func NewStorageClassAdvancedFeatureProvider(client *kubernetes.Clientset) AdvancedFeatureProvider {
 	storageclassClient := client.StorageV1()
-	lw := cache.NewListWatchFromClient(storageclassClient.RESTClient(), "storageclasses", metav1.NamespaceAll, fields.Everything())
+	// for any cluster-scoped resource,
+	// pass a 'nil' option to 'searchInNamespace()' function to get 'NamespaceAll'
+	lw := cache.NewListWatchFromClient(storageclassClient.RESTClient(), "storageclasses", searchInNamespace(nil), fields.Everything())
 	return &StorageClassAdvancedFeatureProvider{
 		SharedIndexInformer: cache.NewSharedIndexInformer(lw, &storagev1.StorageClass{}, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}),
 	}
@@ -111,8 +112,8 @@ func (c *CephRBDMirrorAdvancedFeatureProvider) AdvancedFeature(namespaces ...str
 	return 0
 }
 
-func NewCephRBDMirrorAdvancedFeatureProvider(client *rookclient.Clientset) AdvancedFeatureProvider {
-	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephrbdmirrors", metav1.NamespaceAll, fields.Everything())
+func NewCephRBDMirrorAdvancedFeatureProvider(opts *options.Options, client *rookclient.Clientset) AdvancedFeatureProvider {
+	lw := cache.NewListWatchFromClient(client.CephV1().RESTClient(), "cephrbdmirrors", searchInNamespace(opts), fields.Everything())
 	return &CephRBDMirrorAdvancedFeatureProvider{
 		SharedIndexInformer: cache.NewSharedIndexInformer(lw, &cephv1.CephRBDMirror{}, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}),
 	}
@@ -140,9 +141,9 @@ func NewClusterAdvancedFeatureCollector(opts *options.Options) *ClusterAdvanceFe
 	}
 
 	advFeatureProviders := []AdvancedFeatureProvider{
-		NewCephClusterAdvancedFeatureProvider(client),
-		NewCephObjectStoreAdvancedFeatureProvider(client),
-		NewCephRBDMirrorAdvancedFeatureProvider(client),
+		NewCephClusterAdvancedFeatureProvider(opts, client),
+		NewCephObjectStoreAdvancedFeatureProvider(opts, client),
+		NewCephRBDMirrorAdvancedFeatureProvider(opts, client),
 	}
 
 	if k8Client, err := kubernetes.NewForConfig(opts.Kubeconfig); err == nil {
@@ -201,9 +202,7 @@ func (c *ClusterAdvanceFeatureCollector) collectAdvancedFeatureUse(ch chan<- pro
 	)
 }
 
-func getAllStorageClasses(
-	lister storagev1listers.StorageClassLister,
-	namespaces []string) []*storagev1.StorageClass {
+func getAllStorageClasses(lister storagev1listers.StorageClassLister) []*storagev1.StorageClass {
 	var err error
 	allSCs, err := lister.List(labels.Everything())
 	if err != nil {

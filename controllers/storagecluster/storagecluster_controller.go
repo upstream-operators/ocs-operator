@@ -9,7 +9,7 @@ import (
 	nbv1 "github.com/noobaa/noobaa-operator/v5/pkg/apis/noobaa/v1alpha1"
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
 	"github.com/operator-framework/operator-lib/conditions"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/controllers/util"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -38,6 +38,7 @@ func (r *StorageClusterReconciler) initializeImageVars() error {
 	r.images.Ceph = os.Getenv("CEPH_IMAGE")
 	r.images.NooBaaCore = os.Getenv("NOOBAA_CORE_IMAGE")
 	r.images.NooBaaDB = os.Getenv("NOOBAA_DB_IMAGE")
+	r.images.OCSMetricsExporter = os.Getenv("OCS_METRICS_EXPORTER_IMAGE")
 
 	if r.images.Ceph == "" {
 		err := fmt.Errorf("CEPH_IMAGE environment variable not found")
@@ -50,6 +51,10 @@ func (r *StorageClusterReconciler) initializeImageVars() error {
 	} else if r.images.NooBaaDB == "" {
 		err := fmt.Errorf("NOOBAA_DB_IMAGE environment variable not found")
 		r.Log.Error(err, "Missing NOOBAA_DB_IMAGE environment variable for ocs initialization.")
+		return err
+	} else if r.images.OCSMetricsExporter == "" {
+		err := fmt.Errorf("OCS_METRICS_EXPORTER_IMAGE environment variable not found")
+		r.Log.Error(err, "Missing OCS_METRICS_EXPORTER_IMAGE environment variable for ocs initialization.")
 		return err
 	}
 	return nil
@@ -71,28 +76,31 @@ func (r *StorageClusterReconciler) initializeServerVersion() error {
 
 // ImageMap holds mapping information between component image name and the image url
 type ImageMap struct {
-	Ceph       string
-	NooBaaCore string
-	NooBaaDB   string
+	Ceph               string
+	NooBaaCore         string
+	NooBaaDB           string
+	OCSMetricsExporter string
 }
 
 // StorageClusterReconciler reconciles a StorageCluster object
 // nolint:revive
 type StorageClusterReconciler struct {
 	client.Client
-	ctx                context.Context
-	Log                logr.Logger
-	Scheme             *runtime.Scheme
-	serverVersion      *version.Info
-	conditions         []conditionsv1.Condition
-	phase              string
-	nodeCount          int
-	platform           *Platform
-	images             ImageMap
-	recorder           *util.EventReporter
-	OperatorCondition  conditions.Condition
-	IsNoobaaStandalone bool
-	clusters           *util.Clusters
+	ctx                       context.Context
+	Log                       logr.Logger
+	Scheme                    *runtime.Scheme
+	serverVersion             *version.Info
+	conditions                []conditionsv1.Condition
+	phase                     string
+	nodeCount                 int
+	platform                  *Platform
+	images                    ImageMap
+	recorder                  *util.EventReporter
+	OperatorCondition         conditions.Condition
+	IsNoobaaStandalone        bool
+	IsMultipleStorageClusters bool
+	clusters                  *util.Clusters
+	OperatorNamespace         string
 }
 
 // SetupWithManager sets up a controller with manager
@@ -123,16 +131,6 @@ func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	enqueueStorageClusterRequest := handler.EnqueueRequestsFromMapFunc(
 		func(context context.Context, obj client.Object) []reconcile.Request {
-
-			ocinit, ok := obj.(*ocsv1.OCSInitialization)
-			if !ok {
-				return []reconcile.Request{}
-			}
-
-			if ocinit.Status.Phase != util.PhaseReady {
-				return []reconcile.Request{}
-			}
-
 			// Get the StorageCluster objects
 			scList := &ocsv1.StorageClusterList{}
 			err := r.Client.List(context, scList, &client.ListOptions{Namespace: obj.GetNamespace()})
@@ -156,6 +154,36 @@ func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	)
 
+	enqueueFromStorageProfile := handler.EnqueueRequestsFromMapFunc(
+		func(_ context.Context, obj client.Object) []reconcile.Request {
+			// only storage profile is being watched
+			_ = obj.(*ocsv1.StorageProfile)
+
+			// Get the StorageCluster object
+			scList := &ocsv1.StorageClusterList{}
+			err := r.Client.List(r.ctx, scList, client.InNamespace(obj.GetNamespace()), client.Limit(1))
+			if err != nil {
+				r.Log.Error(err, "Unable to list StorageCluster objects")
+				return []reconcile.Request{}
+			}
+
+			if len(scList.Items) == 0 {
+				return []reconcile.Request{}
+			}
+
+			sc := scList.Items[0]
+			// Return name and namespace of StorageCluster
+			return []reconcile.Request{
+				{
+					NamespacedName: types.NamespacedName{
+						Name:      sc.Name,
+						Namespace: sc.Namespace,
+					},
+				},
+			}
+		},
+	)
+
 	builder := ctrl.NewControllerManagedBy(mgr).
 		For(&ocsv1.StorageCluster{}, builder.WithPredicates(scPredicate)).
 		Owns(&cephv1.CephCluster{}).
@@ -163,7 +191,7 @@ func (r *StorageClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Service{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.ConfigMap{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&ocsv1.OCSInitialization{}, enqueueStorageClusterRequest).
+		Watches(&ocsv1.StorageProfile{}, enqueueFromStorageProfile).
 		Watches(
 			&extv1.CustomResourceDefinition{
 				ObjectMeta: metav1.ObjectMeta{

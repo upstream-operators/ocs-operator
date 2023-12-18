@@ -2,13 +2,12 @@ package collectors
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
 
-	v1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	v1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	"github.com/red-hat-storage/ocs-operator/v4/metrics/internal/options"
 )
 
@@ -25,7 +24,7 @@ func NewStorageClusterCollector(opts *options.Options) *StorageClusterCollector 
 		klog.Errorf("Unable to get client: %v", err)
 		return nil
 	}
-	lw := cache.NewListWatchFromClient(cl, "storageclusters", metav1.NamespaceAll, fields.Everything())
+	lw := cache.NewListWatchFromClient(cl, "storageclusters", searchInNamespace(opts), fields.Everything())
 	sharedIndexInformer := cache.NewSharedIndexInformer(lw, &v1.StorageCluster{}, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
 	return &StorageClusterCollector{
 		KMSServerConnectionStatus: prometheus.NewDesc(

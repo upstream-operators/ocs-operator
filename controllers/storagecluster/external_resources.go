@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	cephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -25,19 +25,23 @@ import (
 )
 
 const (
-	externalClusterDetailsSecret = "rook-ceph-external-cluster-details"
-	externalClusterDetailsKey    = "external_cluster_details"
-	cephFsStorageClassName       = "cephfs"
-	cephRbdStorageClassName      = "ceph-rbd"
-	cephRgwStorageClassName      = "ceph-rgw"
-	externalCephRgwEndpointKey   = "endpoint"
-	cephRgwTLSSecretKey          = "ceph-rgw-tls-cert"
+	externalClusterDetailsSecret          = "rook-ceph-external-cluster-details"
+	externalClusterDetailsKey             = "external_cluster_details"
+	cephFsStorageClassName                = "cephfs"
+	cephRbdStorageClassName               = "ceph-rbd"
+	cephRbdRadosNamespaceStorageClassName = "ceph-rbd-rados-namespace"
+	cephRgwStorageClassName               = "ceph-rgw"
+	externalCephRgwEndpointKey            = "endpoint"
+	cephRgwTLSSecretKey                   = "ceph-rgw-tls-cert"
 )
 
 const (
 	rookCephOperatorConfigName = "rook-ceph-operator-config"
 	rookEnableCephFSCSIKey     = "ROOK_CSI_ENABLE_CEPHFS"
 )
+
+// store the name of the rados-namespace
+var radosNamespaceName string
 
 var (
 	// externalOCSResources will hold the ExternalResources for storageclusters
@@ -146,7 +150,7 @@ func (r *StorageClusterReconciler) retrieveSecret(secretName string, instance *o
 }
 
 // deleteSecret function delete the secret object with the specified name
-func (r *StorageClusterReconciler) deleteSecret(secretName string, instance *ocsv1.StorageCluster) error {
+func (r *StorageClusterReconciler) deleteSecret(instance *ocsv1.StorageCluster) error {
 	found, err := r.retrieveSecret(externalClusterDetailsSecret, instance)
 	if errors.IsNotFound(err) {
 		r.Log.Info("External rhcs mode secret already deleted.")
@@ -271,7 +275,7 @@ func (obj *ocsExternalResources) ensureCreated(r *StorageClusterReconciler, inst
 }
 
 // ensureDeleted is dummy func for the ocsExternalResources
-func (obj *ocsExternalResources) ensureDeleted(r *StorageClusterReconciler, instance *ocsv1.StorageCluster) (reconcile.Result, error) {
+func (obj *ocsExternalResources) ensureDeleted(_ *StorageClusterReconciler, _ *ocsv1.StorageCluster) (reconcile.Result, error) {
 	return reconcile.Result{}, nil
 }
 
@@ -290,6 +294,7 @@ func (r *StorageClusterReconciler) createExternalStorageClusterResources(instanc
 	enableRookCSICephFS := false
 	// this stores only the StorageClasses specified in the Secret
 	availableSCCs := []StorageClassConfiguration{}
+
 	data, ok := externalOCSResources[instance.UID]
 	if !ok {
 		return fmt.Errorf("Unable to retrieve external resource from externalOCSResources")
@@ -347,6 +352,23 @@ func (r *StorageClusterReconciler) createExternalStorageClusterResources(instanc
 				r.Log.Error(err, "Could not create CephFilesystemSubVolumeGroup.", "CephFilesystemSubVolumeGroup", klog.KRef(found.Namespace, found.Name))
 				return err
 			}
+		case "CephBlockPoolRadosNamespace":
+			radosNamespaceName = d.Data["radosNamespaceName"]
+			rbdPool := d.Data["pool"]
+			objectMeta.Name = radosNamespaceName
+			radosNamespace := &cephv1.CephBlockPoolRadosNamespace{ObjectMeta: objectMeta}
+			mutateFn := func() error {
+				radosNamespace.Spec = cephv1.CephBlockPoolRadosNamespaceSpec{
+					BlockPoolName: rbdPool,
+				}
+				return nil
+			}
+			_, err := ctrl.CreateOrUpdate(context.TODO(), r.Client, radosNamespace, mutateFn)
+			if err != nil {
+				r.Log.Error(err, "Could not create CephBlockPoolRadosNamespace.", "CephBlockPoolRadosNamespace", klog.KRef(radosNamespace.Namespace, radosNamespace.Name))
+				return err
+			}
+
 		case "StorageClass":
 			var scc StorageClassConfiguration
 			if d.Name == cephFsStorageClassName {
@@ -354,6 +376,10 @@ func (r *StorageClusterReconciler) createExternalStorageClusterResources(instanc
 				enableRookCSICephFS = true
 			} else if d.Name == cephRbdStorageClassName {
 				scc = newCephBlockPoolStorageClassConfiguration(instance)
+			} else if d.Name == cephRbdRadosNamespaceStorageClassName {
+				scc = newCephBlockPoolStorageClassConfiguration(instance)
+				// update the storageclass name to rados storagesclass name
+				scc.storageClass.Name = fmt.Sprintf("%s-%s", instance.Name, d.Name)
 			} else if d.Name == cephRgwStorageClassName {
 				rgwEndpoint := d.Data[externalCephRgwEndpointKey]
 				if err := checkEndpointReachable(rgwEndpoint, 5*time.Second); err != nil {
@@ -381,7 +407,7 @@ func (r *StorageClusterReconciler) createExternalStorageClusterResources(instanc
 		}
 	}
 	// creating only the available storageClasses
-	err = r.createStorageClasses(availableSCCs)
+	err = r.createStorageClasses(availableSCCs, instance.Namespace)
 	if err != nil {
 		r.Log.Error(err, "Failed to create needed StorageClasses.")
 		return err
@@ -485,7 +511,7 @@ func (r *StorageClusterReconciler) deleteExternalSecret(sc *ocsv1.StorageCluster
 	if !sc.Spec.ExternalStorage.Enable {
 		return nil
 	}
-	err = r.deleteSecret(externalClusterDetailsSecret, sc)
+	err = r.deleteSecret(sc)
 	if err != nil {
 		r.Log.Error(err, "Error while deleting external rhcs mode secret.")
 	}

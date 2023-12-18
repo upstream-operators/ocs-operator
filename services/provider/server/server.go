@@ -16,10 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
-	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/v4/api/v1alpha1"
+	"github.com/blang/semver/v4"
+	"github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
+	ocsv1alpha1 "github.com/red-hat-storage/ocs-operator/api/v4/v1alpha1"
 	controllers "github.com/red-hat-storage/ocs-operator/v4/controllers/storageconsumer"
 	pb "github.com/red-hat-storage/ocs-operator/v4/services/provider/pb"
+	ocsVersion "github.com/red-hat-storage/ocs-operator/v4/version"
 	rookCephv1 "github.com/rook/rook/pkg/apis/ceph.rook.io/v1"
 
 	"google.golang.org/grpc"
@@ -42,6 +44,7 @@ const (
 	ProviderCertsMountPoint      = "/mnt/cert"
 	onboardingTicketKeySecret    = "onboarding-ticket-key"
 	storageClassRequestNameLabel = "ocs.openshift.io/storageclassrequest-name"
+	notAvailable                 = "N/A"
 )
 
 const (
@@ -55,6 +58,7 @@ type OCSProviderServer struct {
 	consumerManager            *ocsConsumerManager
 	storageClassRequestManager *storageClassRequestManager
 	namespace                  string
+	version                    *semver.Version
 }
 
 type onboardingTicket struct {
@@ -73,9 +77,14 @@ func NewOCSProviderServer(ctx context.Context, namespace string) (*OCSProviderSe
 		return nil, fmt.Errorf("failed to create new OCSConumer instance. %v", err)
 	}
 
-	storageClassRequestManager, err := newStorageClassRequestManager(ctx, client, namespace)
+	storageClassRequestManager, err := newStorageClassRequestManager(client, namespace)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new StorageClassRequest instance. %v", err)
+	}
+
+	version, err := semver.Make(ocsVersion.Version)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse operator version as semver. %v", err)
 	}
 
 	return &OCSProviderServer{
@@ -83,11 +92,21 @@ func NewOCSProviderServer(ctx context.Context, namespace string) (*OCSProviderSe
 		consumerManager:            consumerManager,
 		storageClassRequestManager: storageClassRequestManager,
 		namespace:                  namespace,
+		version:                    &version,
 	}, nil
 }
 
 // OnboardConsumer RPC call to onboard a new OCS consumer cluster.
 func (s *OCSProviderServer) OnboardConsumer(ctx context.Context, req *pb.OnboardConsumerRequest) (*pb.OnboardConsumerResponse, error) {
+
+	version, err := semver.Make(req.ClientOperatorVersion)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "malformed ClientPlatformVersion for client %q is provided. %v", req.ConsumerName, err)
+	}
+
+	if s.version.Minor != version.Minor || s.version.Major != version.Major {
+		return nil, status.Errorf(codes.InvalidArgument, "both major and minor version of server and client %q should match for onboarding process", req.ConsumerName)
+	}
 
 	pubKey, err := s.getOnboardingValidationKey(ctx)
 	if err != nil {
@@ -653,11 +672,29 @@ func (s *OCSProviderServer) GetStorageClassClaimConfig(ctx context.Context, req 
 // ReportStatus rpc call to check if a consumer can reach to the provider.
 func (s *OCSProviderServer) ReportStatus(ctx context.Context, req *pb.ReportStatusRequest) (*pb.ReportStatusResponse, error) {
 	// Update the status in storageConsumer CR
-	if err := s.consumerManager.UpdateStatusLastHeatbeat(ctx, req.StorageConsumerUUID); err != nil {
-		if kerrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.NotFound, "Failed to update lastHeartbeat in the storageConsumer resource: %v", err)
+	klog.Infof("Client status report received: %+v", req)
+
+	if req.ClientOperatorVersion == "" {
+		req.ClientOperatorVersion = notAvailable
+	} else {
+		if _, err := semver.Parse(req.ClientOperatorVersion); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "Malformed ClientOperatorVersion: %v", err)
 		}
-		return nil, status.Errorf(codes.Internal, "Failed to update lastHeartbeat in the storageConsumer resource: %v", err)
+	}
+
+	if req.ClientPlatformVersion == "" {
+		req.ClientPlatformVersion = notAvailable
+	} else {
+		if _, err := semver.Parse(req.ClientPlatformVersion); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "Malformed ClientPlatformVersion: %v", err)
+		}
+	}
+
+	if err := s.consumerManager.UpdateConsumerStatus(ctx, req.StorageConsumerUUID, req); err != nil {
+		if kerrors.IsNotFound(err) {
+			return nil, status.Errorf(codes.NotFound, "Failed to update lastHeartbeat payload in the storageConsumer resource: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "Failed to update lastHeartbeat payload in the storageConsumer resource: %v", err)
 	}
 
 	return &pb.ReportStatusResponse{}, nil

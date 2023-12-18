@@ -7,7 +7,7 @@ import (
 	"time"
 
 	conditionsv1 "github.com/openshift/custom-resource-status/conditions/v1"
-	ocsv1 "github.com/red-hat-storage/ocs-operator/v4/api/v1"
+	ocsv1 "github.com/red-hat-storage/ocs-operator/api/v4/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8sv1 "k8s.io/api/core/v1"
@@ -368,30 +368,30 @@ func (t *DeployManager) labelWorkerNodes() error {
 	}
 
 	for _, node := range nodes.Items {
-		old, err := json.Marshal(node)
+		currentNode, err := json.Marshal(node)
 		if err != nil {
 			return err
 		}
-		new := node.DeepCopy()
+		updatedNode := node.DeepCopy()
 
 		if t.ArbiterEnabled() && node.GetLabels()[corev1.LabelZoneFailureDomainStable] == arbiterZone {
 			// don't label the nodes in the arbiter zone
 			arbiterNodeCount++
 			continue
 		}
-		new.Labels["cluster.ocs.openshift.io/openshift-storage"] = ""
+		updatedNode.Labels["cluster.ocs.openshift.io/openshift-storage"] = ""
 
-		newJSON, err := json.Marshal(new)
+		newJSON, err := json.Marshal(updatedNode)
 		if err != nil {
 			return err
 		}
 
-		patch, err := strategicpatch.CreateTwoWayMergePatch(old, newJSON, node)
+		patch, err := strategicpatch.CreateTwoWayMergePatch(currentNode, newJSON, node)
 		if err != nil {
 			return err
 		}
 
-		err = t.Client.Patch(context.TODO(), new, client.RawPatch(types.StrategicMergePatchType, patch))
+		err = t.Client.Patch(context.TODO(), updatedNode, client.RawPatch(types.StrategicMergePatchType, patch))
 		if err != nil {
 			return err
 		}
